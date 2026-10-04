@@ -87,4 +87,11 @@ public class User {
         return email;
     }
 
+    public String getPasswordHash() {
+        return passwordHash;
+    }
+
+    public UserRole getRole(){return role;}
+
+    public UserStatus getStatus(){return status;}
 }
