@@ -48,6 +48,9 @@ public class User {
     @Column(nullable = false)
     private Instant updatedAt;
 
+    @Column(nullable = false, unique = true, updatable = false)
+    private Long customerNumber;
+
 
     protected User() {
     }
@@ -56,7 +59,8 @@ public class User {
             String firstName,
             String lastName,
             String email,
-            String passwordHash) {
+            String passwordHash,
+            Long customerNumber) {
 
         User user = new User();
 
@@ -67,6 +71,7 @@ public class User {
         user.passwordHash = passwordHash;
         user.role = UserRole.CUSTOMER;
         user.status = UserStatus.ACTIVE;
+        user.customerNumber=customerNumber;
 
         return user;
     }
@@ -94,4 +99,7 @@ public class User {
     public UserRole getRole(){return role;}
 
     public UserStatus getStatus(){return status;}
+
+    public Long getCustomerNumber() {return customerNumber;
+    }
 }
