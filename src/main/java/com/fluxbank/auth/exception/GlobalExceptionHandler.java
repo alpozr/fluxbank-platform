@@ -1,5 +1,8 @@
 package com.fluxbank.auth.exception;
 
+import com.fluxbank.account.domain.exception.AccountAccessDeniedException;
+import com.fluxbank.account.domain.exception.AccountCannotBeClosedException;
+import com.fluxbank.account.domain.exception.AccountNotFoundException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -75,5 +78,45 @@ public class GlobalExceptionHandler {
         );
 
         return problemDetail;
+    }
+    @ExceptionHandler(AccountNotFoundException.class)
+    public ProblemDetail handleAccountNotFound(
+            AccountNotFoundException exception
+    ) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.NOT_FOUND,
+                exception.getMessage()
+        );
+
+        problem.setTitle("Account not found");
+
+        return problem;
+    }
+    @ExceptionHandler(AccountAccessDeniedException.class)
+    public ProblemDetail handleAccountAccessDenied(
+            AccountAccessDeniedException exception
+    ) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.FORBIDDEN,
+                exception.getMessage()
+        );
+
+        problem.setTitle("Account access denied");
+
+        return problem;
+    }
+
+    @ExceptionHandler(AccountCannotBeClosedException.class)
+    public ProblemDetail handleAccountCannotBeClosed(
+            AccountCannotBeClosedException exception
+    ) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.CONFLICT,
+                exception.getMessage()
+        );
+
+        problem.setTitle("Account cannot be closed");
+
+        return problem;
     }
 }

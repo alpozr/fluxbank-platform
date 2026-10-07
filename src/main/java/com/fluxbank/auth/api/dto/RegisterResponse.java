@@ -6,6 +6,7 @@ public record RegisterResponse(
         UUID publicId,
         String firstName,
         String lastName,
-        String email
+        String email,
+        Long customerNumber
 ) {
 }

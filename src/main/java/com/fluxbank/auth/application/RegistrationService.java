@@ -42,11 +42,14 @@ public class RegistrationService {
             }
             String passwordHash = passwordEncoder.encode(registerRequest.password());
 
+            Long customerNumber =
+                userRepository.getNextCustomerNumber();
+
             User userResponse = User.createCustomer(registerRequest.firstName()
-                    , registerRequest.lastName(), normalizedEmail, passwordHash);
+                    , registerRequest.lastName(), normalizedEmail, passwordHash,customerNumber);
             try {
                   User user = userRepository.saveAndFlush(userResponse);
-                  return new RegisterResponse(user.getPublicId(), user.getFirstName(), user.getLastName(), user.getEmail());
+                  return new RegisterResponse(user.getPublicId(), user.getFirstName(), user.getLastName(), user.getEmail(),user.getCustomerNumber());
             }
             catch (DataIntegrityViolationException exception){
               if (isEmailUniqueViolation(exception)) {
@@ -77,4 +80,5 @@ public class RegistrationService {
 
         return false;
     }
+
 }
