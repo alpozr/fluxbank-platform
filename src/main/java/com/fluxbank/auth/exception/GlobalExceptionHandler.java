@@ -4,6 +4,9 @@ import com.fluxbank.account.domain.exception.AccountAccessDeniedException;
 import com.fluxbank.account.domain.exception.AccountCannotBeClosedException;
 import com.fluxbank.account.domain.exception.AccountNotFoundException;
 import com.fluxbank.account.domain.exception.CustomerNotFoundException;
+import com.fluxbank.beneficiary.exception.BeneficiaryAlreadyExistsException;
+import com.fluxbank.beneficiary.exception.BeneficiaryNotFoundException;
+import com.fluxbank.beneficiary.exception.InvalidIbanException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -127,6 +130,45 @@ public class GlobalExceptionHandler {
         );
 
         problem.setTitle("Account cannot be closed");
+
+        return problem;
+    }
+
+    @ExceptionHandler(InvalidIbanException.class)
+    public ProblemDetail handleInvalidIban(
+            InvalidIbanException exception) {
+
+        ProblemDetail problem =
+                ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
+
+        problem.setTitle("Invalid IBAN");
+        problem.setDetail(exception.getMessage());
+
+        return problem;
+    }
+
+    @ExceptionHandler(BeneficiaryNotFoundException.class)
+    public ProblemDetail handleBeneficiaryNotFound(
+            BeneficiaryNotFoundException exception) {
+
+        ProblemDetail problem =
+                ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
+
+        problem.setTitle("Beneficiary not found");
+        problem.setDetail(exception.getMessage());
+
+        return problem;
+    }
+
+    @ExceptionHandler(BeneficiaryAlreadyExistsException.class)
+    public ProblemDetail handleBeneficiaryAlreadyExists(
+            BeneficiaryAlreadyExistsException exception) {
+
+        ProblemDetail problem =
+                ProblemDetail.forStatus(HttpStatus.CONFLICT);
+
+        problem.setTitle("Beneficiary already exists");
+        problem.setDetail(exception.getMessage());
 
         return problem;
     }
