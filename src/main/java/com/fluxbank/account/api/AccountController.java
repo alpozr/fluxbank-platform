@@ -45,19 +45,15 @@ public class AccountController {
                 authentication.getName()
         );
 
-        return ResponseEntity
-                .status(HttpStatus.CREATED)
-                .body(response);
+        return ResponseEntity.ok(response);
     }
-    @GetMapping("/getAccounts")
+    @GetMapping
     public ResponseEntity<List<AccountResponse>> getAccounts(
             Authentication authentication
     ) {
         List<AccountResponse> accounts =
                 accountService.getAllAccountsByUser(authentication.getName());
-        return ResponseEntity
-                .status(HttpStatus.CREATED)
-                .body(accounts);
+        return ResponseEntity.ok(accounts);
     }
 
     @GetMapping("/{publicId}")
@@ -69,9 +65,7 @@ public class AccountController {
                 publicId,
                 authentication.getName()
         );
-        return ResponseEntity
-                .status(HttpStatus.CREATED)
-                .body(response);
+        return ResponseEntity.ok(response);
     }
     @PostMapping("/{publicId}/block")
     public ResponseEntity<AccountResponse> blockAccount(

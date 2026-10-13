@@ -7,6 +7,7 @@ import com.fluxbank.account.domain.Account;
 import com.fluxbank.account.domain.CurrencyCode;
 import com.fluxbank.account.domain.exception.AccountAccessDeniedException;
 import com.fluxbank.account.domain.exception.AccountNotFoundException;
+import com.fluxbank.account.domain.exception.CustomerNotFoundException;
 import com.fluxbank.account.repository.AccountRepository;
 import com.fluxbank.customer.domain.User;
 import com.fluxbank.customer.domain.UserRole;
@@ -48,9 +49,7 @@ public class AccountService {
               }
               User targetUser = userRepository
                       .findByCustomerNumberForUpdate(request.customerNumber())
-                      .orElseThrow(() ->
-                              new IllegalArgumentException("Customer not found")
-                      );
+                      .orElseThrow(CustomerNotFoundException::new);
               int nextSuffix = accountRepository
                       .findMaxSuffixByUser(targetUser)
                       .map(maxSuffix -> maxSuffix + 1)
@@ -64,7 +63,7 @@ public class AccountService {
               String iban = ibanGenerator.generate(
                       ibanAccountIdentifier
               );
-              Account savedAccount = Account.create(authenticatedUser, accountNumber, iban, ibanAccountIdentifier, nextSuffix, request.currency());
+              Account savedAccount = Account.create(targetUser, accountNumber, iban, ibanAccountIdentifier, nextSuffix, request.currency());
               accountRepository.save(savedAccount);
               return new AccountResponse(savedAccount.getPublicId(),
                       savedAccount.getUser().getCustomerNumber(),
