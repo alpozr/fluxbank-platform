@@ -1,12 +1,13 @@
 package com.fluxbank.auth.exception;
 
-import com.fluxbank.account.domain.exception.AccountAccessDeniedException;
-import com.fluxbank.account.domain.exception.AccountCannotBeClosedException;
-import com.fluxbank.account.domain.exception.AccountNotFoundException;
-import com.fluxbank.account.domain.exception.CustomerNotFoundException;
+import com.fluxbank.account.domain.exception.*;
 import com.fluxbank.beneficiary.exception.BeneficiaryAlreadyExistsException;
 import com.fluxbank.beneficiary.exception.BeneficiaryNotFoundException;
 import com.fluxbank.beneficiary.exception.InvalidIbanException;
+import com.fluxbank.transfer.application.exception.SourceAccountNotFoundException;
+import com.fluxbank.transfer.application.exception.BeneficiaryNotFluxBankAccountException;
+import com.fluxbank.transfer.application.exception.SameAccountTransferException;
+import com.fluxbank.transfer.application.exception.CurrencyMismatchException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -172,4 +173,110 @@ public class GlobalExceptionHandler {
 
         return problem;
     }
+
+    @ExceptionHandler(SourceAccountNotFoundException.class)
+    public ProblemDetail handleSourceAccountNotFound(
+            SourceAccountNotFoundException exception) {
+
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.NOT_FOUND,
+                exception.getMessage()
+        );
+
+        problem.setTitle("Source account not found");
+        problem.setProperty("errorCode", "TRANSFER_SOURCE_ACCOUNT_NOT_FOUND");
+
+        return problem;
+    }
+
+    @ExceptionHandler(BeneficiaryNotFluxBankAccountException.class)
+    public ProblemDetail handleBeneficiaryNotFluxBankAccount(
+            BeneficiaryNotFluxBankAccountException exception) {
+
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.UNPROCESSABLE_ENTITY,
+                exception.getMessage()
+        );
+
+        problem.setTitle("Invalid transfer destination");
+        problem.setProperty("errorCode", "TRANSFER_DESTINATION_NOT_SUPPORTED");
+
+        return problem;
+    }
+
+    @ExceptionHandler(SameAccountTransferException.class)
+    public ProblemDetail handleSameAccountTransfer(
+            SameAccountTransferException exception) {
+
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.UNPROCESSABLE_ENTITY,
+                exception.getMessage()
+        );
+
+        problem.setTitle("Invalid transfer");
+        problem.setProperty("errorCode", "TRANSFER_SAME_ACCOUNT");
+
+        return problem;
+    }
+
+    @ExceptionHandler(InsufficientFundsException.class)
+    public ProblemDetail handleInsufficientFunds(
+            InsufficientFundsException exception) {
+
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.UNPROCESSABLE_ENTITY,
+                exception.getMessage()
+        );
+
+        problem.setTitle("Insufficient funds");
+        problem.setProperty("errorCode", "TRANSFER_INSUFFICIENT_FUNDS");
+
+        return problem;
+    }
+
+    @ExceptionHandler(AccountNotAvailableForDebitException.class)
+    public ProblemDetail handleAccountNotAvailableForDebit(
+            AccountNotAvailableForDebitException exception) {
+
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.CONFLICT,
+                exception.getMessage()
+        );
+
+        problem.setTitle("Source account unavailable");
+        problem.setProperty("errorCode", "TRANSFER_SOURCE_ACCOUNT_UNAVAILABLE");
+
+        return problem;
+    }
+
+    @ExceptionHandler(AccountNotAvailableForCreditException.class)
+    public ProblemDetail handleAccountNotAvailableForCredit(
+            AccountNotAvailableForCreditException exception) {
+
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.CONFLICT,
+                exception.getMessage()
+        );
+
+        problem.setTitle("Destination account unavailable");
+        problem.setProperty("errorCode", "TRANSFER_DESTINATION_ACCOUNT_UNAVAILABLE");
+
+        return problem;
+    }
+
+    @ExceptionHandler(CurrencyMismatchException.class)
+    public ProblemDetail handleCurrencyMismatch(
+            CurrencyMismatchException exception) {
+
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.UNPROCESSABLE_ENTITY,
+                exception.getMessage()
+        );
+
+        problem.setTitle("Currency mismatch");
+        problem.setProperty("errorCode", "TRANSFER_CURRENCY_MISMATCH");
+
+        return problem;
+    }
+
 }
