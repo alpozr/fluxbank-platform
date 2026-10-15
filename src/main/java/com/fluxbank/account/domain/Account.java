@@ -1,6 +1,9 @@
 package com.fluxbank.account.domain;
 
 import com.fluxbank.account.domain.exception.AccountCannotBeClosedException;
+import com.fluxbank.account.domain.exception.AccountNotAvailableForCreditException;
+import com.fluxbank.account.domain.exception.AccountNotAvailableForDebitException;
+import com.fluxbank.account.domain.exception.InsufficientFundsException;
 import com.fluxbank.customer.domain.User;
 import jakarta.persistence.*;
 import org.springframework.data.annotation.CreatedDate;
@@ -223,5 +226,43 @@ public class Account {
         }
 
         this.expired = true;
+    }
+
+    public void debit(BigDecimal amount) {
+        validateAmount(amount);
+
+        if (closed || dormant || blocked || expired) {
+            throw new AccountNotAvailableForDebitException(
+                    "Account is not available for debit"
+            );
+        }
+
+        if (balance.compareTo(amount) < 0) {
+            throw new InsufficientFundsException(
+                    "Insufficient account balance"
+            );
+        }
+
+        this.balance = this.balance.subtract(amount);
+    }
+
+    public void credit(BigDecimal amount) {
+        validateAmount(amount);
+
+        if (closed || expired) {
+            throw new AccountNotAvailableForCreditException(
+                    "Account is not available for credit"
+            );
+        }
+
+        this.balance = this.balance.add(amount);
+    }
+
+    private void validateAmount(BigDecimal amount) {
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException(
+                    "Amount must be greater than zero"
+            );
+        }
     }
 }
