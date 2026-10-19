@@ -59,7 +59,7 @@ class TransferControllerTest {
     @ParameterizedTest
     @MethodSource("businessErrors")
     void shouldReturnProblemDetailForBusinessFailure(RuntimeException exception, int status, String title, String errorCode) throws Exception {
-        when(service.createInternalTransfer(eq(email), any())).thenThrow(exception);
+        when(service.createTransfer(eq(email), any())).thenThrow(exception);
 
         var result = mvc.perform(post("/api/v1/transfers").principal(principal)
                         .contentType(MediaType.APPLICATION_JSON).content(requestJson()))
@@ -77,7 +77,7 @@ class TransferControllerTest {
         var response = new TransferResponse(publicId, "TR-1", sourceId, "Ada Lovelace",
                 "BG08FLUX06110000000001", "FluxBank", new BigDecimal("10.00"), CurrencyCode.EUR,
                 TransferType.INTERNAL, TransferStatus.COMPLETED, null, Instant.now(), Instant.now());
-        when(service.createInternalTransfer(email, new CreateTransferRequest(sourceId, beneficiaryId, new BigDecimal("10.00"))))
+        when(service.createTransfer(email, new CreateTransferRequest(sourceId, beneficiaryId, new BigDecimal("10.00"))))
                 .thenReturn(response);
 
         mvc.perform(post("/api/v1/transfers").principal(principal)

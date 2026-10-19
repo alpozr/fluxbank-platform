@@ -4,10 +4,11 @@ package com.fluxbank.account.application;
 import com.fluxbank.account.api.AccountResponse;
 import com.fluxbank.account.api.CreateAccountRequest;
 import com.fluxbank.account.domain.Account;
-import com.fluxbank.account.domain.CurrencyCode;
+import com.fluxbank.account.domain.AccountBalance;
 import com.fluxbank.account.domain.exception.AccountAccessDeniedException;
 import com.fluxbank.account.domain.exception.AccountNotFoundException;
 import com.fluxbank.account.domain.exception.CustomerNotFoundException;
+import com.fluxbank.account.repository.AccountBalanceRepository;
 import com.fluxbank.account.repository.AccountRepository;
 import com.fluxbank.customer.domain.User;
 import com.fluxbank.customer.domain.UserRole;
@@ -15,7 +16,6 @@ import com.fluxbank.customer.repository.UserRepository;
 import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Service;
 
-import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 
@@ -23,15 +23,22 @@ import java.util.UUID;
 public class AccountService {
 
        private final AccountRepository accountRepository;
+       private final AccountBalanceRepository accountBalanceRepository;
        private final UserRepository userRepository;
        private final IbanGenerator ibanGenerator;
-       private final AccountNumberGenerator accountNumberGenerator ;
+       private final AccountNumberGenerator accountNumberGenerator;
 
-       public AccountService(AccountRepository accountRepository, UserRepository userRepository, IbanGenerator ibanGenerator, AccountNumberGenerator accountNumberGenerator) {
+       public AccountService(
+               AccountRepository accountRepository,
+               UserRepository userRepository,
+               IbanGenerator ibanGenerator,
+               AccountNumberGenerator accountNumberGenerator,
+               AccountBalanceRepository accountBalanceRepository) {
               this.accountRepository = accountRepository;
               this.userRepository = userRepository;
               this.ibanGenerator = ibanGenerator;
               this.accountNumberGenerator = accountNumberGenerator;
+              this.accountBalanceRepository = accountBalanceRepository;
        }
 
        @Transactional
@@ -63,18 +70,14 @@ public class AccountService {
               String iban = ibanGenerator.generate(
                       ibanAccountIdentifier
               );
-              Account savedAccount = Account.create(targetUser, accountNumber, iban, ibanAccountIdentifier, nextSuffix, request.currency());
-              accountRepository.save(savedAccount);
-              return new AccountResponse(savedAccount.getPublicId(),
-                      savedAccount.getUser().getCustomerNumber(),
-                      savedAccount.getAccountNumber(),
-                      savedAccount.getIban(),
-                      savedAccount.getCurrency(),
-                      savedAccount.getBalance(),
-                      savedAccount.isClosed(),
-                      savedAccount.isDormant(),
-                      savedAccount.isBlocked(),
-                      savedAccount.isExpired());
+              Account account = Account.create(targetUser, accountNumber, iban, ibanAccountIdentifier, nextSuffix, request.currency());
+              Account savedAccount = accountRepository.save(account);
+
+              AccountBalance accountBalance =
+                      AccountBalance.create(savedAccount);
+
+              accountBalanceRepository.save(accountBalance);
+              return toResponse(savedAccount);
        }
        @Transactional
        public AccountResponse closeAccount(UUID accountPublicId, String authenticatedEmail){
@@ -118,7 +121,7 @@ public class AccountService {
                       account.getAccountNumber(),
                       account.getIban(),
                       account.getCurrency(),
-                      account.getBalance(),
+                      account.getBalance().getAvailableBalance(),
                       account.isClosed(),
                       account.isDormant(),
                       account.isBlocked(),

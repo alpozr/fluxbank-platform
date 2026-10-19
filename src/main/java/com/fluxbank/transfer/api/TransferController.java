@@ -23,7 +23,7 @@ public class TransferController {
             Authentication authentication) {
 
         TransferResponse response =
-                transferService.createInternalTransfer(
+                transferService.createTransfer(
                         authentication.getName(),
                         request
                 );

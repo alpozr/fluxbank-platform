@@ -1,10 +1,10 @@
 package com.fluxbank.transfer.application;
 
 import com.fluxbank.account.domain.Account;
-import com.fluxbank.account.repository.AccountRepository;
+import com.fluxbank.account.domain.AccountBalance;
+import com.fluxbank.account.repository.AccountBalanceRepository;
 import com.fluxbank.transfer.application.exception.CurrencyMismatchException;
 import com.fluxbank.transfer.domain.Transfer;
-import com.fluxbank.transfer.domain.TransferFailureReason;
 import com.fluxbank.transfer.domain.TransferStatus;
 import com.fluxbank.transfer.domain.TransferType;
 import com.fluxbank.transfer.repository.TransferRepository;
@@ -18,14 +18,14 @@ import java.util.UUID;
 @Service
 public class InternalTransferProcessor {
 
-    private final AccountRepository accountRepository;
+    private final AccountBalanceRepository accountBalanceRepository;
     private final TransferRepository transferRepository;
 
     public InternalTransferProcessor(
-            AccountRepository accountRepository,
-            TransferRepository transferRepository) {
-
-        this.accountRepository = accountRepository;
+            AccountBalanceRepository accountBalanceRepository,
+            TransferRepository transferRepository
+    ) {
+        this.accountBalanceRepository = accountBalanceRepository;
         this.transferRepository = transferRepository;
     }
 
@@ -33,8 +33,11 @@ public class InternalTransferProcessor {
     public void process(
             UUID transferPublicId,
             UUID sourceAccountPublicId,
-            UUID destinationAccountPublicId) {
+            UUID destinationAccountPublicId
+    ) {
 
+        // 1. Lock the transfer so the same pending transfer
+        // cannot be processed concurrently.
         Transfer transfer = transferRepository
                 .findByPublicIdForUpdate(transferPublicId)
                 .orElseThrow(() ->
@@ -53,30 +56,45 @@ public class InternalTransferProcessor {
             );
         }
 
-        List<Account> lockedAccounts =
-                accountRepository.findAllByPublicIdInForUpdate(
-                        List.of(
-                                sourceAccountPublicId,
-                                destinationAccountPublicId
-                        )
-                );
+        // 2. Lock both balance rows.
+        // Repository query orders them by Account ID
+        // to provide deterministic lock ordering.
+        List<AccountBalance> lockedBalances =
+                accountBalanceRepository
+                        .findAllByAccountPublicIdInForUpdate(
+                                List.of(
+                                        sourceAccountPublicId,
+                                        destinationAccountPublicId
+                                )
+                        );
 
-            if (lockedAccounts.size() != 2) {
+        if (lockedBalances.size() != 2) {
             throw new IllegalStateException(
-                    "Source or destination account not found"
+                    "Source or destination account balance not found"
             );
         }
 
-        Account sourceAccount = findAccount(
-                lockedAccounts,
-                sourceAccountPublicId
-        );
+        // 3. Identify balances by publicId.
+        // Never depend on list position.
+        AccountBalance sourceBalance =
+                findBalance(
+                        lockedBalances,
+                        sourceAccountPublicId
+                );
 
-        Account destinationAccount = findAccount(
-                lockedAccounts,
-                destinationAccountPublicId
-        );
+        AccountBalance destinationBalance =
+                findBalance(
+                        lockedBalances,
+                        destinationAccountPublicId
+                );
 
+        Account sourceAccount =
+                sourceBalance.getAccount();
+
+        Account destinationAccount =
+                destinationBalance.getAccount();
+
+        // 4. Internal transfers currently do not support FX.
         if (sourceAccount.getCurrency()
                 != destinationAccount.getCurrency()) {
 
@@ -84,24 +102,36 @@ public class InternalTransferProcessor {
                     "Source and destination account currencies must match"
             );
         }
-        BigDecimal amount = transfer.getAmount();
-        sourceAccount.debit(amount);
-        destinationAccount.credit(amount);
 
+        sourceAccount.validateAvailableForDebit();
+        destinationAccount.validateAvailableForCredit();
+
+        BigDecimal amount = transfer.getAmount();
+
+        // 5. Financial state belongs to AccountBalance.
+        sourceBalance.debit(amount);
+        destinationBalance.credit(amount);
+
+        // 6. Balance changes and transfer completion
+        // are committed atomically.
         transfer.complete();
     }
 
-    private Account findAccount(
-            List<Account> accounts,
-            UUID publicId) {
-
-        return accounts.stream()
-                .filter(account ->
-                        account.getPublicId().equals(publicId)
+    private AccountBalance findBalance(
+            List<AccountBalance> balances,
+            UUID accountPublicId
+    ) {
+        return balances.stream()
+                .filter(balance ->
+                        balance.getAccount()
+                                .getPublicId()
+                                .equals(accountPublicId)
                 )
                 .findFirst()
                 .orElseThrow(() ->
-                        new IllegalStateException("Account not found")
+                        new IllegalStateException(
+                                "Account balance not found"
+                        )
                 );
     }
 }

@@ -1,30 +1,19 @@
 package com.fluxbank.account.domain;
 
-import com.fluxbank.account.domain.exception.AccountCannotBeClosedException;
-import com.fluxbank.account.domain.exception.AccountNotAvailableForCreditException;
-import com.fluxbank.account.domain.exception.AccountNotAvailableForDebitException;
-import com.fluxbank.account.domain.exception.InsufficientFundsException;
 import com.fluxbank.customer.domain.User;
+import com.fluxbank.account.domain.exception.AccountCannotBeClosedException;
+import com.fluxbank.account.domain.exception.AccountNotAvailableForDebitException;
+import com.fluxbank.account.domain.exception.AccountNotAvailableForCreditException;
 import jakarta.persistence.*;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
-import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.Currency;
 import java.util.UUID;
 
 @Entity
-@Table(
-        name = "accounts",
-        uniqueConstraints = {
-                @UniqueConstraint(
-                        name = "uq_accounts_user_suffix",
-                        columnNames = {"user_id", "suffix"}
-                )
-        }
-)
+@Table(name = "accounts")
 @EntityListeners(AuditingEntityListener.class)
 public class Account {
 
@@ -32,27 +21,61 @@ public class Account {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "public_id", nullable = false, unique = true, updatable = false)
+    @Column(
+            name = "public_id",
+            nullable = false,
+            unique = true,
+            updatable = false
+    )
     private UUID publicId;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "user_id", nullable = false)
+    @JoinColumn(
+            name = "user_id",
+            nullable = false
+    )
     private User user;
 
-    @Column(name = "account_number", nullable = false, unique = true, length = 30, updatable = false)
+    @Column(
+            name = "account_number",
+            nullable = false,
+            unique = true,
+            length = 30,
+            updatable = false
+    )
     private String accountNumber;
 
-    @Column(nullable = false, unique = true, length = 34, updatable = false)
+    @Column(
+            name = "iban",
+            nullable = false,
+            unique = true,
+            length = 34,
+            updatable = false
+    )
     private String iban;
 
-    @Column(nullable = false, updatable = false)
+    @Column(
+            name = "iban_account_identifier",
+            nullable = false,
+            unique = true,
+            updatable = false
+    )
+    private Long ibanAccountIdentifier;
+
+    @Column(
+            name = "suffix",
+            nullable = false,
+            updatable = false
+    )
     private Integer suffix;
 
-    @Column(nullable = false, precision = 19, scale = 4)
-    private BigDecimal balance;
-
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 3, updatable = false)
+    @Column(
+            name = "currency",
+            nullable = false,
+            length = 3,
+            updatable = false
+    )
     private CurrencyCode currency;
 
     @Column(name = "is_closed", nullable = false)
@@ -67,27 +90,139 @@ public class Account {
     @Column(name = "is_expired", nullable = false)
     private boolean expired;
 
+    @OneToOne(
+            mappedBy = "account",
+            fetch = FetchType.LAZY
+    )
+    private AccountBalance balance;
+
     @CreatedDate
-    @Column(name = "created_at", nullable = false, updatable = false)
+    @Column(
+            name = "created_at",
+            nullable = false,
+            updatable = false
+    )
     private Instant createdAt;
 
     @LastModifiedDate
-    @Column(name = "updated_at", nullable = false)
-    private Instant updatedAt;
-
     @Column(
-            name = "iban_account_identifier",
-            nullable = false,
-            unique = true,
-            updatable = false
+            name = "updated_at",
+            nullable = false
     )
-    private Long ibanAccountIdentifier;
+    private Instant updatedAt;
 
     protected Account() {
     }
 
+    public static Account create(
+            User user,
+            String accountNumber,
+            String iban,
+            Long ibanAccountIdentifier,
+            Integer suffix,
+            CurrencyCode currency
+    ) {
+        Account account = new Account();
+
+        account.publicId = UUID.randomUUID();
+        account.user = user;
+        account.accountNumber = accountNumber;
+        account.iban = iban;
+        account.ibanAccountIdentifier = ibanAccountIdentifier;
+        account.suffix = suffix;
+        account.currency = currency;
+
+        account.closed = false;
+        account.dormant = false;
+        account.blocked = false;
+        account.expired = false;
+
+        return account;
+    }
+
+    public void close() {
+        if (closed) {
+            return;
+        }
+
+        if (balance.getCurrentBalance().compareTo(java.math.BigDecimal.ZERO) != 0) {
+            throw new AccountCannotBeClosedException(
+                    "Account with a non-zero balance cannot be closed"
+            );
+        }
+
+        closed = true;
+    }
+
+    public void block() {
+        if (closed) {
+            throw new IllegalStateException(
+                    "Closed account cannot be blocked"
+            );
+        }
+
+        blocked = true;
+    }
+
+    public void unblock() {
+        if (closed) {
+            throw new IllegalStateException(
+                    "Closed account cannot be unblocked"
+            );
+        }
+
+        blocked = false;
+    }
+
+    public void markDormant() {
+        if (closed) {
+            throw new IllegalStateException(
+                    "Closed account cannot become dormant"
+            );
+        }
+
+        dormant = true;
+    }
+
+    public void reactivate() {
+        if (closed) {
+            throw new IllegalStateException(
+                    "Closed account cannot be reactivated"
+            );
+        }
+
+        dormant = false;
+    }
+
+    public void expire() {
+        if (closed) {
+            return;
+        }
+        expired = true;
+    }
+
+    public void validateAvailableForDebit() {
+        if (closed || dormant || blocked || expired) {
+            throw new AccountNotAvailableForDebitException(
+                    "Account is not available for debit"
+            );
+        }
+    }
+
+    public void validateAvailableForCredit() {
+        if (closed || expired) {
+            throw new AccountNotAvailableForCreditException(
+                    "Account is not available for credit"
+            );
+        }
+    }
+
     public UUID getPublicId() {
         return publicId;
+    }
+
+    public User getUser() {
+        return user;
     }
 
     public String getAccountNumber() {
@@ -104,10 +239,6 @@ public class Account {
 
     public Integer getSuffix() {
         return suffix;
-    }
-
-    public BigDecimal getBalance() {
-        return balance;
     }
 
     public CurrencyCode getCurrency() {
@@ -130,6 +261,10 @@ public class Account {
         return expired;
     }
 
+    public AccountBalance getBalance() {
+        return balance;
+    }
+
     public Instant getCreatedAt() {
         return createdAt;
     }
@@ -137,132 +272,14 @@ public class Account {
     public Instant getUpdatedAt() {
         return updatedAt;
     }
-    public User getUser() {
-        return user;
-    }
 
-    public static Account create(User user,
-                                 String accountNumber,
-                                 String iban,
-                                 Long ibanAccountIdentifier,
-                                 Integer suffix,
-                                 CurrencyCode currency){
-        Account account = new Account();
-
-        account.publicId = UUID.randomUUID();
-        account.user = user;
-        account.accountNumber = accountNumber;
-        account.iban = iban;
-        account.ibanAccountIdentifier = ibanAccountIdentifier;
-        account.suffix = suffix;
-        account.currency = currency;
-        account.balance = BigDecimal.ZERO;
-
-        account.closed = false;
-        account.dormant = false;
-        account.blocked = false;
-        account.expired = false;
-
-        return account;
-    }
-
-    public void close() {
-        if (this.closed) {
-            return;
-        }
-
-        if (this.balance.compareTo(BigDecimal.ZERO) != 0) {
-            throw new AccountCannotBeClosedException(
-                    "Account with a non-zero balance cannot be closed"
-            );
-        }
-
-        this.closed = true;
-    }
-
-    public void block() {
-        if (this.closed) {
+    void assignBalance(AccountBalance balance) {
+        if (this.balance != null) {
             throw new IllegalStateException(
-                    "Closed account cannot be blocked"
+                    "Account balance is already assigned"
             );
         }
 
-        this.blocked = true;
-    }
-
-    public void unblock() {
-        if (this.closed) {
-            throw new IllegalStateException(
-                    "Closed account cannot be unblocked"
-            );
-        }
-
-        this.blocked = false;
-    }
-
-    public void markDormant() {
-        if (this.closed) {
-            throw new IllegalStateException(
-                    "Closed account cannot become dormant"
-            );
-        }
-
-        this.dormant = true;
-    }
-
-    public void reactivate() {
-        if (this.closed) {
-            throw new IllegalStateException(
-                    "Closed account cannot be reactivated"
-            );
-        }
-
-        this.dormant = false;
-    }
-
-    public void expire() {
-        if (this.closed) {
-            return;
-        }
-
-        this.expired = true;
-    }
-
-    public void debit(BigDecimal amount) {
-        validateAmount(amount);
-
-        if (closed || dormant || blocked || expired) {
-            throw new AccountNotAvailableForDebitException(
-                    "Account is not available for debit"
-            );
-        }
-
-        if (balance.compareTo(amount) < 0) {
-            throw new InsufficientFundsException(
-                    "Insufficient account balance"
-            );
-        }
-
-        this.balance = this.balance.subtract(amount);
-    }
-
-    public void credit(BigDecimal amount) {
-        validateAmount(amount);
-
-        if (closed || expired) {
-            throw new AccountNotAvailableForCreditException(
-                    "Account is not available for credit"
-            );
-        }
-
-        this.balance = this.balance.add(amount);
-    }
-
-    private void validateAmount(BigDecimal amount) {
-        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalArgumentException(
-                    "Amount must be greater than zero"
-            );
-        }
+        this.balance = balance;
     }
 }

@@ -5,6 +5,7 @@ import com.fluxbank.account.domain.*;
 import com.fluxbank.account.domain.exception.AccountAccessDeniedException;
 import com.fluxbank.account.domain.exception.CustomerNotFoundException;
 import com.fluxbank.account.repository.AccountRepository;
+import com.fluxbank.account.repository.AccountBalanceRepository;
 import com.fluxbank.customer.domain.*;
 import com.fluxbank.customer.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,6 +18,7 @@ import static org.mockito.Mockito.*;
 class AccountServiceTest {
     private UserRepository users;
     private AccountRepository accounts;
+    private AccountBalanceRepository balances;
     private AccountService service;
     private User actor;
     private User owner;
@@ -27,13 +29,16 @@ class AccountServiceTest {
     void setUp() {
         users = mock(UserRepository.class);
         accounts = mock(AccountRepository.class);
-        service = new AccountService(accounts, users, new IbanGenerator(), new AccountNumberGenerator());
+        balances = mock(AccountBalanceRepository.class);
+        when(accounts.save(any(Account.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        service = new AccountService(accounts, users, new IbanGenerator(), new AccountNumberGenerator(), balances);
         actor = mock(User.class);
         when(actor.getRole()).thenReturn(UserRole.CUSTOMER);
         when(actor.getCustomerNumber()).thenReturn(1000001L);
         when(users.findByEmail("actor@example.com")).thenReturn(Optional.of(actor));
         owner = User.createCustomer("A", "B", "owner@example.com", "unused", 1000002L);
         account = Account.create(owner, "611-1000002-001", "BG00FLUX06110000000001", 1L, 1, currency);
+        AccountBalance.create(account);
     }
 
     @Test
@@ -46,6 +51,12 @@ class AccountServiceTest {
         var saved = ArgumentCaptor.forClass(Account.class);
         verify(accounts).save(saved.capture());
         assertSame(owner, saved.getValue().getUser());
+        var savedBalance = ArgumentCaptor.forClass(AccountBalance.class);
+        verify(balances).save(savedBalance.capture());
+        assertSame(saved.getValue(), savedBalance.getValue().getAccount());
+        assertSame(savedBalance.getValue(), saved.getValue().getBalance());
+        assertEquals(0, savedBalance.getValue().getCurrentBalance().signum());
+        assertEquals(0, savedBalance.getValue().getReservedBalance().signum());
         assertEquals(1000002L, response.customerNumber());
         assertEquals("611-1000002-003", response.accountNumber());
     }
