@@ -4,6 +4,7 @@ import com.fluxbank.account.application.*;
 import com.fluxbank.account.domain.CurrencyCode;
 import com.fluxbank.account.domain.exception.*;
 import com.fluxbank.account.repository.AccountRepository;
+import com.fluxbank.account.repository.AccountBalanceRepository;
 import com.fluxbank.auth.exception.GlobalExceptionHandler;
 import com.fluxbank.customer.domain.*;
 import com.fluxbank.customer.repository.UserRepository;
@@ -92,7 +93,7 @@ class AccountControllerTest {
         when(admin.getRole()).thenReturn(UserRole.ADMIN);
         when(users.findByEmail(email)).thenReturn(Optional.of(admin));
         when(users.findByCustomerNumberForUpdate(1000002L)).thenReturn(Optional.empty());
-        var realService = new AccountService(accounts, users, new IbanGenerator(), new AccountNumberGenerator());
+        var realService = new AccountService(accounts, users, new IbanGenerator(), new AccountNumberGenerator(), mock(AccountBalanceRepository.class));
         mvcFor(realService).perform(post("/api/v1/accounts").principal(principal).contentType(MediaType.APPLICATION_JSON).content(creationJson()))
                 .andExpect(status().isNotFound()).andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
                 .andExpect(jsonPath("status").value(404)).andExpect(jsonPath("title").value("Customer not found"));

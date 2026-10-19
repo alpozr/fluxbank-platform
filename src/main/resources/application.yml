@@ -25,3 +25,8 @@ security:
   jwt:
     secret: ${JWT_SECRET}
     expiration-ms: 900000
+
+payment-provider:
+  base-url: ${PAYMENT_PROVIDER_BASE_URL:http://localhost:5001}
+  settlement-account: ${PAYMENT_PROVIDER_SETTLEMENT_ACCOUNT:FLOAT-MAIN-001}
+  recipient-account: ${PAYMENT_PROVIDER_RECIPIENT_ACCOUNT:EXT-CUST-001}

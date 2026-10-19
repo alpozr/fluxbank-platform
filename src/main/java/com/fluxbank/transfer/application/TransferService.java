@@ -11,17 +11,19 @@ import com.fluxbank.beneficiary.repository.BeneficiaryRepository;
 import com.fluxbank.customer.domain.User;
 import com.fluxbank.customer.repository.UserRepository;
 import com.fluxbank.transfer.api.CreateTransferRequest;
+import com.fluxbank.transfer.api.ReservedExternalTransfer;
 import com.fluxbank.transfer.api.TransferResponse;
 import com.fluxbank.transfer.application.exception.CurrencyMismatchException;
 import com.fluxbank.transfer.application.exception.SourceAccountNotFoundException;
-import com.fluxbank.transfer.application.exception.BeneficiaryNotFluxBankAccountException;
 import com.fluxbank.transfer.application.exception.SameAccountTransferException;
-import com.fluxbank.transfer.domain.Transfer;
+import com.fluxbank.transfer.application.provider.ExternalTransferProcessor;
 import com.fluxbank.transfer.domain.TransferFailureReason;
 import com.fluxbank.transfer.domain.TransferType;
 import com.fluxbank.transfer.repository.TransferRepository;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -33,6 +35,8 @@ public class TransferService {
     private final TransferRepository transferRepository;
     private final TransferLifecycleService lifecycleService;
     private final InternalTransferProcessor internalTransferProcessor;
+    private final ExternalTransferReservationService externalTransferReservationService;
+    private final ExternalTransferProcessor externalTransferProcess;
 
     public TransferService(
             UserRepository userRepository,
@@ -40,7 +44,7 @@ public class TransferService {
             BeneficiaryRepository beneficiaryRepository,
             TransferRepository transferRepository,
             TransferLifecycleService lifecycleService,
-            InternalTransferProcessor internalTransferProcessor) {
+            InternalTransferProcessor internalTransferProcessor, ExternalTransferReservationService externalTransferReservationService, ExternalTransferProcessor externalTransferProcess) {
 
         this.userRepository = userRepository;
         this.accountRepository = accountRepository;
@@ -48,9 +52,11 @@ public class TransferService {
         this.transferRepository = transferRepository;
         this.lifecycleService = lifecycleService;
         this.internalTransferProcessor = internalTransferProcessor;
+        this.externalTransferReservationService = externalTransferReservationService;
+        this.externalTransferProcess = externalTransferProcess;
     }
 
-    public TransferResponse createInternalTransfer(
+    public TransferResponse createTransfer(
             String authenticatedEmail,
             CreateTransferRequest request) {
 
@@ -74,34 +80,55 @@ public class TransferService {
                 )
                 .orElseThrow(BeneficiaryNotFoundException::new);
 
-        Account destinationAccount = accountRepository
-                .findByIban(beneficiary.getIban())
-                .orElseThrow(BeneficiaryNotFluxBankAccountException::new);
+        Optional<Account> destinationAccount =
+                accountRepository.findByIban(
+                        beneficiary.getIban()
+                );
 
+        if(destinationAccount.isPresent()){
+            return processInternalTransfer(user,
+                    sourceAccount,
+                    beneficiary,
+                    destinationAccount.get(),
+                    request.amount());
+        }
+        return processExternalTransfer(
+                user,
+                sourceAccount,
+                beneficiary,
+                request.amount()
+        );
+    }
+
+
+    private TransferResponse processInternalTransfer(
+            User user,
+            Account sourceAccount,
+            Beneficiary beneficiary,
+            Account destinationAccount,
+            BigDecimal amount
+    ) {
         if (sourceAccount.getPublicId()
                 .equals(destinationAccount.getPublicId())) {
 
             throw new SameAccountTransferException();
         }
 
-        UUID transferPublicId = lifecycleService.createPending(
-                user,
-                sourceAccount,
-                beneficiary,
-                destinationAccount,
-                request.amount(),
-                TransferType.INTERNAL
-        );
+        UUID transferPublicId =
+                lifecycleService.createPending(
+                        user,
+                        sourceAccount,
+                        beneficiary,
+                        destinationAccount,
+                        amount,
+                        TransferType.INTERNAL
+                );
 
-        try {
-            internalTransferProcessor.process(
-                    transferPublicId,
+        try{
+            internalTransferProcessor.process(transferPublicId,
                     sourceAccount.getPublicId(),
-                    destinationAccount.getPublicId()
-            );
-
+                    destinationAccount.getPublicId());
             return lifecycleService.getResponse(transferPublicId);
-
         } catch (InsufficientFundsException ex) {
 
             lifecycleService.markFailed(
@@ -138,5 +165,18 @@ public class TransferService {
 
             throw ex;
         }
+    }
+    private TransferResponse processExternalTransfer(
+            User user,
+            Account sourceAccount,
+            Beneficiary beneficiary,
+            BigDecimal amount
+    ) {
+        ReservedExternalTransfer externalTransfer = externalTransferReservationService.createPendingAndReserve(user,
+                sourceAccount.getPublicId(), beneficiary,
+                amount);
+        externalTransferProcess.process(externalTransfer);
+        return lifecycleService
+                .getResponse(externalTransfer.publicId());
     }
 }
