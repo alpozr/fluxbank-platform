@@ -17,13 +17,17 @@ import java.util.UUID;
 public class ExternalTransferFinalizationService {
 
     private final TransferRepository transferRepository;
+    private final TransferEventPublisher transferEventPublisher;
+
     private final AccountBalanceRepository accountBalanceRepository;
 
     public ExternalTransferFinalizationService(
             TransferRepository transferRepository,
-            AccountBalanceRepository accountBalanceRepository
+            AccountBalanceRepository accountBalanceRepository,
+            TransferEventPublisher transferEventPublisher
     ) {
         this.transferRepository = transferRepository;
+        this.transferEventPublisher = transferEventPublisher;
         this.accountBalanceRepository = accountBalanceRepository;
     }
 
@@ -46,6 +50,7 @@ public class ExternalTransferFinalizationService {
         BigDecimal settledAmount = transfer.getAmount();
         sourceAccountBalance.settle(settledAmount);
         transfer.complete();
+        transferEventPublisher.publishCompleted(transfer.getPublicId());
     }
 
     @Transactional

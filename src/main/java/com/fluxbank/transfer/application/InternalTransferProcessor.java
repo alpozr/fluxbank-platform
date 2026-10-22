@@ -20,13 +20,17 @@ public class InternalTransferProcessor {
 
     private final AccountBalanceRepository accountBalanceRepository;
     private final TransferRepository transferRepository;
+    private final TransferEventPublisher transferEventPublisher;
+
 
     public InternalTransferProcessor(
             AccountBalanceRepository accountBalanceRepository,
-            TransferRepository transferRepository
+            TransferRepository transferRepository,
+            TransferEventPublisher transferEventPublisher
     ) {
         this.accountBalanceRepository = accountBalanceRepository;
         this.transferRepository = transferRepository;
+        this.transferEventPublisher = transferEventPublisher;
     }
 
     @Transactional
@@ -115,6 +119,7 @@ public class InternalTransferProcessor {
         // 6. Balance changes and transfer completion
         // are committed atomically.
         transfer.complete();
+        transferEventPublisher.publishCompleted(transfer.getPublicId());
     }
 
     private AccountBalance findBalance(
