@@ -1,0 +1,12 @@
+spring:
+  datasource:
+    hikari:
+      connection-init-sql: "SET statement_timeout TO '15s'"
+  jpa:
+    hibernate:
+      ddl-auto: validate
+
+security:
+  jwt:
+    # Test-only key so the application context does not require JWT_SECRET.
+    secret: MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=
