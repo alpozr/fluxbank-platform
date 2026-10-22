@@ -61,6 +61,7 @@ class BeneficiaryServiceTest {
         verify(beneficiaries).saveAndFlush(saved.capture());
         verify(beneficiaries).findByOwnerAndIban(owner, IBAN);
         assertSame(owner, saved.getValue().getOwner());
+        assertNotNull(saved.getValue().getPublicId());
         assertEquals(IBAN, saved.getValue().getIban());
         assertTrue(saved.getValue().isActive());
         assertTrue(result.created());
@@ -113,11 +114,14 @@ class BeneficiaryServiceTest {
         var originalPublicId = existing.getPublicId();
         when(beneficiaries.findByOwnerAndIban(owner, IBAN)).thenReturn(Optional.of(existing));
 
-        var result = service.create(EMAIL, new CreateBeneficiaryRequest("Ada", "Lovelace", IBAN, "FluxBank"));
+        var result = service.create(EMAIL, new CreateBeneficiaryRequest("Grace", "Hopper", IBAN, "Different Bank"));
 
         assertTrue(existing.isActive());
         assertFalse(result.created());
         assertEquals(originalPublicId, result.beneficiary().publicId());
+        assertEquals(new BeneficiaryResponse(originalPublicId, "Ada", "Lovelace", IBAN, "FluxBank"),
+                result.beneficiary());
+        assertSame(owner, existing.getOwner());
         verify(beneficiaries, never()).saveAndFlush(any());
         verify(beneficiaries, never()).save(any());
     }
@@ -177,12 +181,13 @@ class BeneficiaryServiceTest {
     @ValueSource(strings = {"absent", "inactive", "another-owner"})
     void shouldTreatUnavailableOrOtherOwnersBeneficiaryAsNotFound(String reason) {
         UUID publicId;
+        Beneficiary unavailable = null;
         if (reason.equals("absent")) {
             publicId = UUID.randomUUID();
         } else {
             var entityOwner = reason.equals("another-owner")
                     ? User.createCustomer("Other", "Owner", "other@example.com", "unused", 1000002L) : owner;
-            var unavailable = Beneficiary.create(entityOwner, "Ada", "Lovelace", IBAN, "FluxBank");
+            unavailable = Beneficiary.create(entityOwner, "Ada", "Lovelace", IBAN, "FluxBank");
             if (reason.equals("inactive")) unavailable.deactivate();
             publicId = unavailable.getPublicId();
         }
@@ -191,6 +196,11 @@ class BeneficiaryServiceTest {
 
         assertThrows(BeneficiaryNotFoundException.class, () -> service.getByPublicId(EMAIL, publicId));
         verify(beneficiaries).findByPublicIdAndOwnerAndActiveTrue(publicId, owner);
+        if (unavailable != null) {
+            assertEquals(!reason.equals("inactive"), unavailable.isActive());
+        }
+        verify(beneficiaries, never()).save(any());
+        verify(beneficiaries, never()).saveAndFlush(any());
     }
 
     @Test

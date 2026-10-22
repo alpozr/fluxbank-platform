@@ -42,6 +42,7 @@ class TransferCompletedTransactionListenerTest {
         }
     }
 
+    // Simulates commit callbacks; database transactions and REQUIRES_NEW isolation belong to FLUX-14.
     static class RecordingTransactionManager extends AbstractPlatformTransactionManager {
         int commits;
         int rollbacks;
@@ -107,7 +108,7 @@ class TransferCompletedTransactionListenerTest {
     }
 
     @Test
-    void historyFailureCannotUndoCommittedTransaction() {
+    void historyFailureDoesNotUndoSimulatedCommit() {
         try (var context = new AnnotationConfigApplicationContext(Config.class)) {
             var history = context.getBean(TransactionHistoryService.class);
             var manager = context.getBean(RecordingTransactionManager.class);

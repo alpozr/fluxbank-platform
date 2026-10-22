@@ -288,6 +288,58 @@ class TransferServiceTest {
         );
     }
 
+    @Test
+    void shouldCreatePendingThenProcessInternalAndReturnFinalResponse() {
+        Transfer pending = prepareInternalTransfer();
+        TransferResponse response = mock(TransferResponse.class);
+        when(lifecycle.getResponse(pending.getPublicId())).thenReturn(response);
+
+        assertSame(response, service.createTransfer(email, request));
+
+        var order = inOrder(lifecycle, processor);
+        order.verify(lifecycle).createPending(owner, source, beneficiary, destination,
+                request.amount(), TransferType.INTERNAL);
+        order.verify(processor).process(pending.getPublicId(), source.getPublicId(), destination.getPublicId());
+        order.verify(lifecycle).getResponse(pending.getPublicId());
+        verify(lifecycle, never()).markFailed(any(), any());
+        verifyNoInteractions(externalTransferReservationService, externalTransferProcessor);
+    }
+
+    @Test
+    void shouldPropagateUnexpectedTechnicalFailureWithoutMarkingPendingTransferFailed() {
+        Transfer pending = prepareInternalTransfer();
+        RuntimeException failure = new RuntimeException("Unexpected processing failure");
+        doThrow(failure).when(processor).process(
+                pending.getPublicId(), source.getPublicId(), destination.getPublicId());
+
+        assertSame(failure, assertThrows(RuntimeException.class, () -> service.createTransfer(email, request)));
+
+        var order = inOrder(lifecycle, processor);
+        order.verify(lifecycle).createPending(owner, source, beneficiary, destination,
+                request.amount(), TransferType.INTERNAL);
+        order.verify(processor).process(pending.getPublicId(), source.getPublicId(), destination.getPublicId());
+        verify(lifecycle, never()).markFailed(any(), any());
+        verify(lifecycle, never()).getResponse(any());
+        assertEquals(TransferStatus.PENDING, pending.getStatus());
+        assertNull(pending.getFailureReason());
+        assertNull(pending.getCompletedAt());
+        verifyNoInteractions(externalTransferReservationService, externalTransferProcessor);
+    }
+
+    private Transfer prepareInternalTransfer() {
+        when(users.findByEmail(email)).thenReturn(Optional.of(owner));
+        when(accounts.findByPublicIdAndUser(source.getPublicId(), owner)).thenReturn(Optional.of(source));
+        when(beneficiaries.findByPublicIdAndOwnerAndActiveTrue(beneficiary.getPublicId(), owner))
+                .thenReturn(Optional.of(beneficiary));
+        when(accounts.findByIban(beneficiary.getIban())).thenReturn(Optional.of(destination));
+        Transfer pending = Transfer.create("TRX-reference", owner, source, beneficiary, destination,
+                "Ada Lovelace", beneficiary.getIban(), beneficiary.getBankName(),
+                request.amount(), source.getCurrency(), TransferType.INTERNAL);
+        when(lifecycle.createPending(owner, source, beneficiary, destination,
+                request.amount(), TransferType.INTERNAL)).thenReturn(pending.getPublicId());
+        return pending;
+    }
+
     static Stream<Arguments> processingFailures() {
 
         return Stream.of(

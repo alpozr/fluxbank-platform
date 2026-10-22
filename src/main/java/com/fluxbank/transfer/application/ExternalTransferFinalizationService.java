@@ -58,6 +58,7 @@ public class ExternalTransferFinalizationService {
         Transfer transfer = transferRepository.findByPublicIdForUpdate(transferUUID)
                 .orElseThrow(()-> new IllegalStateException("Transfer not found"));
 
+        validateExternalPending(transfer);
         UUID sourceAccountUUID = transfer.getSourceAccount().getPublicId();
 
         AccountBalance sourceAccountBalance= accountBalanceRepository

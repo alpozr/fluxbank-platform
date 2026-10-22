@@ -1,5 +1,7 @@
 import com.fluxbank.account.application.IbanGenerator;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.math.BigInteger;
 
@@ -54,11 +56,26 @@ class IbanGeneratorTest {
         assertTrue(isValidIban(iban));
     }
 
-    @Test
-    void shouldRejectInvalidAccountIdentifier() {
+    @ParameterizedTest
+    @ValueSource(longs = {0L, -1L, 100000000L})
+    void shouldRejectInvalidAccountIdentifier(long identifier) {
         assertThrows(
                 IllegalArgumentException.class,
-                () -> ibanGenerator.generate(0L)
+                () -> ibanGenerator.generate(identifier)
         );
+    }
+
+    @Test
+    void shouldPadMinimumIdentifierToEightDigits() {
+        String iban = ibanGenerator.generate(1L);
+
+        assertEquals(22, iban.length());
+        assertEquals("00000001", iban.substring(14));
+        assertTrue(isValidIban(iban));
+    }
+
+    @Test
+    void shouldRejectNullAccountIdentifier() {
+        assertThrows(IllegalArgumentException.class, () -> ibanGenerator.generate(null));
     }
 }

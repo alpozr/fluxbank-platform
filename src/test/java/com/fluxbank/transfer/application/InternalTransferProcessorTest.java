@@ -32,10 +32,10 @@ class InternalTransferProcessorTest {
     void setUp() {
         source = Account.create(null, "source", "source-iban", 1L, 1, CurrencyCode.EUR);
         destination = Account.create(null, "destination", "destination-iban", 2L, 2, CurrencyCode.EUR);
-        AccountBalance.create(source).credit(new BigDecimal("100"));
-        AccountBalance.create(destination);
+        AccountBalance.create(source).credit(new BigDecimal("1000"));
+        AccountBalance.create(destination).credit(new BigDecimal("500"));
         transfer = Transfer.create("reference", null, source, null, destination,
-                "name", destination.getIban(), "FluxBank", new BigDecimal("25"),
+                "name", destination.getIban(), "FluxBank", new BigDecimal("100"),
                 CurrencyCode.EUR, TransferType.INTERNAL);
         when(transfers.findByPublicIdForUpdate(transfer.getPublicId())).thenReturn(Optional.of(transfer));
         // Reverse order ensures the processor resolves balances by UUID.
@@ -50,9 +50,17 @@ class InternalTransferProcessorTest {
 
     @Test
     void completesTransferUsingBalancesResolvedByUuid() {
+        doAnswer(invocation -> {
+            assertEquals(new BigDecimal("900"), source.getBalance().getCurrentBalance());
+            assertEquals(new BigDecimal("600"), destination.getBalance().getCurrentBalance());
+            assertEquals(TransferStatus.COMPLETED, transfer.getStatus());
+            assertNotNull(transfer.getCompletedAt());
+            return null;
+        }).when(events).publishCompleted(transfer.getPublicId());
+
         process();
-        assertEquals(new BigDecimal("75"), source.getBalance().getCurrentBalance());
-        assertEquals(new BigDecimal("25"), destination.getBalance().getCurrentBalance());
+        assertEquals(new BigDecimal("900"), source.getBalance().getCurrentBalance());
+        assertEquals(new BigDecimal("600"), destination.getBalance().getCurrentBalance());
         assertEquals(TransferStatus.COMPLETED, transfer.getStatus());
         verify(events).publishCompleted(transfer.getPublicId());
         var order = inOrder(transfers, balances);
@@ -75,7 +83,7 @@ class InternalTransferProcessorTest {
         ReflectionTestUtils.setField(destination, state, true);
         process();
         assertEquals(TransferStatus.COMPLETED, transfer.getStatus());
-        assertEquals(new BigDecimal("25"), destination.getBalance().getCurrentBalance());
+        assertEquals(new BigDecimal("600"), destination.getBalance().getCurrentBalance());
     }
 
     @ParameterizedTest
@@ -88,7 +96,7 @@ class InternalTransferProcessorTest {
 
     @Test
     void reservedFundsCannotBeTransferred() {
-        ReflectionTestUtils.setField(source.getBalance(), "reservedBalance", new BigDecimal("80"));
+        ReflectionTestUtils.setField(source.getBalance(), "reservedBalance", new BigDecimal("950"));
         assertThrows(InsufficientFundsException.class, this::process);
         assertUnchanged();
     }
@@ -111,7 +119,8 @@ class InternalTransferProcessorTest {
     void completedTransferIsRejectedBeforeLockingBalances() {
         transfer.complete();
         assertThrows(IllegalStateException.class, this::process);
-        verifyNoInteractions(balances);
+        verifyNoInteractions(balances, events);
+        assertEquals(TransferStatus.COMPLETED, transfer.getStatus());
     }
 
     @Test
@@ -122,10 +131,44 @@ class InternalTransferProcessorTest {
         assertUnchanged();
     }
 
+    @Test
+    void failedTransferCannotBeProcessedOrPublishCompletion() {
+        transfer.fail(TransferFailureReason.INSUFFICIENT_FUNDS);
+
+        assertThrows(IllegalStateException.class, this::process);
+
+        assertEquals(TransferStatus.FAILED, transfer.getStatus());
+        assertEquals(TransferFailureReason.INSUFFICIENT_FUNDS, transfer.getFailureReason());
+        assertNull(transfer.getCompletedAt());
+        assertEquals(new BigDecimal("1000"), source.getBalance().getCurrentBalance());
+        assertEquals(new BigDecimal("500"), destination.getBalance().getCurrentBalance());
+        verifyNoInteractions(balances, events);
+    }
+
+    @Test
+    void missingTransferCannotBeProcessedOrPublishCompletion() {
+        when(transfers.findByPublicIdForUpdate(transfer.getPublicId())).thenReturn(Optional.empty());
+
+        assertThrows(IllegalStateException.class, this::process);
+
+        assertUnchanged();
+        verifyNoInteractions(balances);
+    }
+
+    @Test
+    void technicalFailureWhileLoadingBalancesCannotCompleteOrPublish() {
+        var failure = new IllegalStateException("Balance storage unavailable");
+        when(balances.findAllByAccountPublicIdInForUpdate(any())).thenThrow(failure);
+
+        assertSame(failure, assertThrows(IllegalStateException.class, this::process));
+
+        assertUnchanged();
+    }
+
     private void assertUnchanged() {
         verifyNoInteractions(events);
-        assertEquals(new BigDecimal("100"), source.getBalance().getCurrentBalance());
-        assertEquals(BigDecimal.ZERO, destination.getBalance().getCurrentBalance());
+        assertEquals(new BigDecimal("1000"), source.getBalance().getCurrentBalance());
+        assertEquals(new BigDecimal("500"), destination.getBalance().getCurrentBalance());
         assertEquals(TransferStatus.PENDING, transfer.getStatus());
     }
 }
