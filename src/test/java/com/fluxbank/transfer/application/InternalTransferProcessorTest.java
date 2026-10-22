@@ -22,7 +22,8 @@ import static org.mockito.Mockito.*;
 class InternalTransferProcessorTest {
     private final AccountBalanceRepository balances = mock(AccountBalanceRepository.class);
     private final TransferRepository transfers = mock(TransferRepository.class);
-    private final InternalTransferProcessor processor = new InternalTransferProcessor(balances, transfers);
+    private final TransferEventPublisher events = mock(TransferEventPublisher.class);
+    private final InternalTransferProcessor processor = new InternalTransferProcessor(balances, transfers, events);
     private Account source;
     private Account destination;
     private Transfer transfer;
@@ -53,6 +54,7 @@ class InternalTransferProcessorTest {
         assertEquals(new BigDecimal("75"), source.getBalance().getCurrentBalance());
         assertEquals(new BigDecimal("25"), destination.getBalance().getCurrentBalance());
         assertEquals(TransferStatus.COMPLETED, transfer.getStatus());
+        verify(events).publishCompleted(transfer.getPublicId());
         var order = inOrder(transfers, balances);
         order.verify(transfers).findByPublicIdForUpdate(transfer.getPublicId());
         order.verify(balances).findAllByAccountPublicIdInForUpdate(
@@ -121,6 +123,7 @@ class InternalTransferProcessorTest {
     }
 
     private void assertUnchanged() {
+        verifyNoInteractions(events);
         assertEquals(new BigDecimal("100"), source.getBalance().getCurrentBalance());
         assertEquals(BigDecimal.ZERO, destination.getBalance().getCurrentBalance());
         assertEquals(TransferStatus.PENDING, transfer.getStatus());
