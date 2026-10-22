@@ -60,4 +60,144 @@ class AccountBalanceTest {
         account.close();
         assertTrue(account.isClosed());
     }
+
+    @Test
+    void reserveIncreasesReservedBalanceWithoutChangingCurrentBalance() {
+        AccountBalance balance = balanceWithReservation("200");
+
+        balance.reserve(new BigDecimal("300"));
+
+        assertBalance(balance, "1000", "500", "500");
+    }
+
+    @Test
+    void reserveCanUseExactlyAllAvailableBalance() {
+        AccountBalance balance = balanceWithReservation("200");
+
+        balance.reserve(new BigDecimal("800"));
+
+        assertBalance(balance, "1000", "1000", "0");
+    }
+
+    @Test
+    void reserveMoreThanAvailableIsRejectedWithoutMutation() {
+        AccountBalance balance = balanceWithReservation("200");
+
+        assertThrows(InsufficientFundsException.class,
+                () -> balance.reserve(new BigDecimal("900")));
+
+        assertBalance(balance, "1000", "200", "800");
+    }
+
+    @Test
+    void releaseReducesReservedBalanceWithoutChangingCurrentBalance() {
+        AccountBalance balance = balanceWithReservation("500");
+
+        balance.release(new BigDecimal("300"));
+
+        assertBalance(balance, "1000", "200", "800");
+    }
+
+    @Test
+    void releaseMoreThanReservedIsRejectedWithoutMutation() {
+        AccountBalance balance = balanceWithReservation("200");
+
+        assertThrows(IllegalStateException.class,
+                () -> balance.release(new BigDecimal("300")));
+
+        assertBalance(balance, "1000", "200", "800");
+    }
+
+    @Test
+    void settleReducesBothCurrentAndReservedBalance() {
+        AccountBalance balance = balanceWithReservation("500");
+
+        balance.settle(new BigDecimal("300"));
+
+        assertBalance(balance, "700", "200", "500");
+    }
+
+    @Test
+    void settleMoreThanReservedIsRejectedWithoutMutation() {
+        AccountBalance balance = balanceWithReservation("200");
+
+        assertThrows(IllegalStateException.class,
+                () -> balance.settle(new BigDecimal("300")));
+
+        assertBalance(balance, "1000", "200", "800");
+    }
+
+    @Test
+    void multipleReservationsAccumulate() {
+        AccountBalance balance = AccountBalance.create(account());
+        balance.credit(new BigDecimal("1000"));
+
+        balance.reserve(new BigDecimal("200"));
+        balance.reserve(new BigDecimal("300"));
+
+        assertBalance(balance, "1000", "500", "500");
+    }
+
+    @Test
+    void settlingOneReservationPreservesOtherOutstandingReservations() {
+        AccountBalance balance = balanceWithReservation("200");
+        balance.reserve(new BigDecimal("300"));
+
+        balance.settle(new BigDecimal("300"));
+
+        assertBalance(balance, "700", "200", "500");
+    }
+
+    @Test
+    void releasingOneReservationPreservesOtherOutstandingReservations() {
+        AccountBalance balance = balanceWithReservation("200");
+        balance.reserve(new BigDecimal("300"));
+
+        balance.release(new BigDecimal("300"));
+
+        assertBalance(balance, "1000", "200", "800");
+    }
+
+    @Test
+    void reserveRejectsNonPositiveAmountsWithoutMutation() {
+        AccountBalance balance = balanceWithReservation("200");
+
+        for (BigDecimal amount : new BigDecimal[]{BigDecimal.ZERO, BigDecimal.ONE.negate()}) {
+            assertThrows(IllegalArgumentException.class, () -> balance.reserve(amount));
+            assertBalance(balance, "1000", "200", "800");
+        }
+    }
+
+    @Test
+    void releaseRejectsNonPositiveAmountsWithoutMutation() {
+        AccountBalance balance = balanceWithReservation("200");
+
+        for (BigDecimal amount : new BigDecimal[]{BigDecimal.ZERO, BigDecimal.ONE.negate()}) {
+            assertThrows(IllegalArgumentException.class, () -> balance.release(amount));
+            assertBalance(balance, "1000", "200", "800");
+        }
+    }
+
+    @Test
+    void settleRejectsNonPositiveAmountsWithoutMutation() {
+        AccountBalance balance = balanceWithReservation("200");
+
+        for (BigDecimal amount : new BigDecimal[]{BigDecimal.ZERO, BigDecimal.ONE.negate()}) {
+            assertThrows(IllegalArgumentException.class, () -> balance.settle(amount));
+            assertBalance(balance, "1000", "200", "800");
+        }
+    }
+
+    private AccountBalance balanceWithReservation(String reserved) {
+        AccountBalance balance = AccountBalance.create(account());
+        balance.credit(new BigDecimal("1000"));
+        balance.reserve(new BigDecimal(reserved));
+        return balance;
+    }
+
+    private void assertBalance(AccountBalance balance, String current, String reserved, String available) {
+        assertEquals(new BigDecimal(current), balance.getCurrentBalance());
+        assertEquals(new BigDecimal(reserved), balance.getReservedBalance());
+        assertEquals(new BigDecimal(available), balance.getAvailableBalance());
+    }
 }

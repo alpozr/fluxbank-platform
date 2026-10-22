@@ -131,6 +131,34 @@ class TransactionHistoryServiceTest {
                 () -> service.createForTransfer(transfer.getPublicId())));
     }
 
+    @Test
+    void internalPersistenceFailureIsNotSwallowedAsDuplicate() {
+        Transfer transfer = transfer(TransferType.INTERNAL, true);
+        var failure = new org.springframework.dao.DataIntegrityViolationException("reference collision");
+        when(transactions.saveAll(any())).thenThrow(failure);
+
+        assertSame(failure, assertThrows(org.springframework.dao.DataIntegrityViolationException.class,
+                () -> service.createForTransfer(transfer.getPublicId())));
+
+        assertEquals(TransferStatus.COMPLETED, transfer.getStatus());
+        verify(transactions, never()).save(any());
+    }
+
+    @Test
+    void failureGeneratingSecondReferenceDoesNotSubmitPartialInternalHistory() {
+        Transfer transfer = transfer(TransferType.INTERNAL, true);
+        var failure = new IllegalStateException("Reference allocation failed");
+        when(references.nextReference()).thenReturn("TXN-first").thenThrow(failure);
+
+        assertSame(failure, assertThrows(IllegalStateException.class,
+                () -> service.createForTransfer(transfer.getPublicId())));
+
+        verify(references, times(2)).nextReference();
+        verify(transactions, never()).save(any());
+        verify(transactions, never()).saveAll(any());
+        assertEquals(TransferStatus.COMPLETED, transfer.getStatus());
+    }
+
     private void existing(Transfer transfer, Account account, TransactionDirection direction) {
         when(transactions.existsByTransferAndAccountAndTypeAndDirection(
                 transfer, account, TransactionType.TRANSFER, direction)).thenReturn(true);
@@ -149,6 +177,7 @@ class TransactionHistoryServiceTest {
         assertEquals(TransactionType.TRANSFER, row.getType());
         assertEquals(direction, row.getDirection());
         assertEquals(transfer.getAmount(), row.getAmount());
+        assertTrue(row.getAmount().signum() > 0);
         assertEquals(CurrencyCode.EUR, row.getCurrency()); // Accounts intentionally use BGN.
         assertEquals(reference, row.getReferenceNumber());
     }

@@ -1,17 +1,23 @@
 package com.fluxbank.account.application;
 
 import com.fluxbank.account.api.CreateAccountRequest;
+import com.fluxbank.account.api.AccountResponse;
 import com.fluxbank.account.domain.*;
 import com.fluxbank.account.domain.exception.AccountAccessDeniedException;
 import com.fluxbank.account.domain.exception.CustomerNotFoundException;
+import com.fluxbank.account.domain.exception.AccountNotFoundException;
 import com.fluxbank.account.repository.AccountRepository;
 import com.fluxbank.account.repository.AccountBalanceRepository;
 import com.fluxbank.customer.domain.*;
 import com.fluxbank.customer.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import java.util.Optional;
+import java.util.List;
+import java.math.BigDecimal;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
@@ -59,6 +65,104 @@ class AccountServiceTest {
         assertEquals(0, savedBalance.getValue().getReservedBalance().signum());
         assertEquals(1000002L, response.customerNumber());
         assertEquals("611-1000002-003", response.accountNumber());
+        Account created = saved.getValue();
+        assertNotNull(created.getPublicId());
+        assertEquals(currency, created.getCurrency());
+        assertEquals(3, created.getSuffix());
+        assertEquals(created.getPublicId(), response.publicId());
+        assertEquals(created.getIban(), response.iban());
+        assertEquals(currency, response.currency());
+        assertEquals(0, response.balance().signum());
+        assertFalse(response.closed());
+        assertFalse(response.dormant());
+        assertFalse(response.blocked());
+        assertFalse(response.expired());
+        verify(accounts).getNextIbanAccountIdentifier();
+    }
+
+    @Test
+    void customerCreatesFirstOwnAccountUsingAllocatedIbanIdentifier() {
+        when(users.findByEmail("actor@example.com")).thenReturn(Optional.of(owner));
+        when(users.findByCustomerNumberForUpdate(owner.getCustomerNumber())).thenReturn(Optional.of(owner));
+        when(accounts.findMaxSuffixByUser(owner)).thenReturn(Optional.empty());
+        Long allocatedIdentifier = 42L;
+        when(accounts.getNextIbanAccountIdentifier()).thenReturn(allocatedIdentifier);
+
+        var response = service.createAccount(
+                new CreateAccountRequest(owner.getCustomerNumber(), CurrencyCode.USD), "actor@example.com");
+
+        var saved = ArgumentCaptor.forClass(Account.class);
+        verify(accounts).save(saved.capture());
+        Account created = saved.getValue();
+        assertSame(owner, created.getUser());
+        assertEquals(1, created.getSuffix());
+        assertEquals(allocatedIdentifier, created.getIbanAccountIdentifier());
+        assertEquals("611-" + owner.getCustomerNumber() + "-001", response.accountNumber());
+        assertEquals(new IbanGenerator().generate(allocatedIdentifier), response.iban());
+        assertEquals(CurrencyCode.USD, response.currency());
+        verify(balances).save(created.getBalance());
+    }
+
+    @Test
+    void accountResponseUsesAvailableBalanceAndPublicIdentifiers() {
+        when(users.findByEmail("actor@example.com")).thenReturn(Optional.of(owner));
+        when(accounts.findByPublicId(account.getPublicId())).thenReturn(Optional.of(account));
+        account.getBalance().credit(new BigDecimal("1000"));
+        account.getBalance().reserve(new BigDecimal("300"));
+
+        var response = service.getAccount(account.getPublicId(), "actor@example.com");
+
+        assertEquals(new AccountResponse(account.getPublicId(), owner.getCustomerNumber(),
+                account.getAccountNumber(), account.getIban(), currency, new BigDecimal("700"),
+                false, false, false, false), response);
+    }
+
+    @Test
+    void listsAccountsSelectedForAuthenticatedUser() {
+        when(users.findByEmail("actor@example.com")).thenReturn(Optional.of(owner));
+        when(accounts.findAllByUser(owner)).thenReturn(List.of(account));
+
+        var response = service.getAllAccountsByUser("actor@example.com");
+
+        assertEquals(List.of(account.getPublicId()), response.stream().map(AccountResponse::publicId).toList());
+        assertEquals(owner.getCustomerNumber(), response.get(0).customerNumber());
+        verify(accounts).findAllByUser(owner);
+    }
+
+    @Test
+    void returnsEmptyListWhenUserHasNoAccounts() {
+        when(accounts.findAllByUser(actor)).thenReturn(List.of());
+
+        assertTrue(service.getAllAccountsByUser("actor@example.com").isEmpty());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"get", "close", "block", "unblock"})
+    void missingAccountUsesExistingNotFoundBehavior(String operation) {
+        when(actor.getRole()).thenReturn(UserRole.ADMIN);
+        when(accounts.findByPublicId(account.getPublicId())).thenReturn(Optional.empty());
+
+        assertThrows(AccountNotFoundException.class, () -> {
+            switch (operation) {
+                case "get" -> service.getAccount(account.getPublicId(), "actor@example.com");
+                case "close" -> service.closeAccount(account.getPublicId(), "actor@example.com");
+                case "block" -> service.blockAccount(account.getPublicId(), "actor@example.com");
+                case "unblock" -> service.unblockAccount(account.getPublicId(), "actor@example.com");
+                default -> throw new IllegalArgumentException("Unexpected test operation");
+            }
+        });
+
+        assertFalse(account.isClosed());
+        assertFalse(account.isBlocked());
+    }
+
+    @Test
+    void adminCanReadAndCloseAnotherCustomersAccount() {
+        when(actor.getRole()).thenReturn(UserRole.ADMIN);
+        when(accounts.findByPublicId(account.getPublicId())).thenReturn(Optional.of(account));
+
+        assertEquals(account.getPublicId(), service.getAccount(account.getPublicId(), "actor@example.com").publicId());
+        assertTrue(service.closeAccount(account.getPublicId(), "actor@example.com").closed());
     }
 
     @Test

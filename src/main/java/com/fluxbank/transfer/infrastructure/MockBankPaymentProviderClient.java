@@ -10,6 +10,7 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
 
 @Component
 public class MockBankPaymentProviderClient
@@ -81,6 +82,10 @@ public class MockBankPaymentProviderClient
 
         } catch (ResourceAccessException ex) {
 
+            return unknown();
+        } catch (RestClientException ex) {
+
+            // RestClient wraps response decoding failures; completion cannot be confirmed.
             return unknown();
         }
     }
