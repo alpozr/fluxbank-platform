@@ -1,0 +1,81 @@
+# Defaults below are for LOCAL DEVELOPMENT ONLY, never production credentials.
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      #Dont download any data for backend container,use ours from dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-fluxbank_dev}
+      #backend can find the postgresql via docker network with the service name which is 'postgres'
+      DB_USERNAME: ${POSTGRES_USER:-fluxbank_dev}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-development-only-password}
+      # Development-only Base64 key; override JWT_SECRET outside local development.
+      JWT_SECRET: ${JWT_SECRET:-MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=}
+      SECURITY_JWT_EXPIRATION_MS: ${JWT_EXPIRATION_MS:-900000}
+      SPRING_JPA_HIBERNATE_DDL_AUTO: validate
+      PAYMENT_PROVIDER_BASE_URL: http://mockbank:5000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mockbank:
+        condition: service_healthy
+
+  mockbank:
+    build:
+      context: ./docker/mockbank
+    environment:
+      # Development-only defaults match the existing MockBank database.
+      POSTGRES_DB: ${MOCKBANK_POSTGRES_DB:-mock_bank}
+      POSTGRES_USER: ${MOCKBANK_POSTGRES_USER:-mock_bank_user}
+      POSTGRES_PASSWORD: ${MOCKBANK_POSTGRES_PASSWORD:-mock_bank_password}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=3).close()"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  postgres:
+    image: postgres:16-alpine
+    # use readytouse postgre image from dockerHub
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-fluxbank_dev}
+      POSTGRES_USER: ${POSTGRES_USER:-fluxbank_dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-development-only-password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  db:
+    build:
+      context: ./docker/mockbank
+      dockerfile: database.Dockerfile
+    environment:
+      # LOCAL DEVELOPMENT ONLY; independent of FluxBank's database credentials.
+      POSTGRES_DB: ${MOCKBANK_POSTGRES_DB:-mock_bank}
+      POSTGRES_USER: ${MOCKBANK_POSTGRES_USER:-mock_bank_user}
+      POSTGRES_PASSWORD: ${MOCKBANK_POSTGRES_PASSWORD:-mock_bank_password}
+    volumes:
+      - mockbank_data:/var/lib/postgresql/data
+    healthcheck:
+      # Check actual schema initialization, not just TCP connectivity.
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\" && psql -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\" -tAc \"SELECT count(*) = 10 AND to_regclass('accounts') IS NOT NULL AND to_regclass('transactions') IS NOT NULL AND to_regclass('ledger_entries') IS NOT NULL AND to_regclass('transaction_attempts') IS NOT NULL FROM local_setup_migrations\" | grep -qx t"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  postgres_data:
+  mockbank_data:

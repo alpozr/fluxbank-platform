@@ -1,0 +1,12 @@
+**
+!Dockerfile
+!database.Dockerfile
+!init-db.sh
+!fixtures.sql
+!requirements.txt
+!run.py
+!LICENSE
+!src/
+!src/**
+**/__pycache__/
+**/*.pyc
