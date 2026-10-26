@@ -108,7 +108,8 @@ class PostgresConcurrencyIntegrationTest extends DatabaseIntegrationTestSupport 
                 SELECT count(*) FROM fluxbank.transfers
                 WHERE status='FAILED' AND failure_reason='INSUFFICIENT_FUNDS'
                 """, Integer.class));
-        assertEquals(2L, transactions.count());
+        assertEquals(0L, transactions.count());
+        assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM fluxbank.outbox_event", Integer.class));
         assertEquals(0, new BigDecimal("80").compareTo(jdbc.queryForObject(
                 "SELECT sum(amount) FROM fluxbank.transfers WHERE status='COMPLETED'", BigDecimal.class)));
     }
@@ -131,7 +132,8 @@ class PostgresConcurrencyIntegrationTest extends DatabaseIntegrationTestSupport 
         assertEquals(1, outcomes.stream().filter(Boolean::booleanValue).count());
         assertBalance(f.source(), "700", "200", "500");
         assertEquals("COMPLETED", state(id).get("status"));
-        assertEquals(1, history(id).size());
+        assertTrue(history(id).isEmpty());
+        assertEquals(1, outbox(id).size());
     }
 
     @Test

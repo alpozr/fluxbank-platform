@@ -49,6 +49,7 @@ class PostgresConstraintsIntegrationTest extends DatabaseIntegrationTestSupport 
         Fixture f = fixture("1000", "500");
         UUID id = pending(f, "200");
         process(f, id);
+        historyService.createForTransfer(id); // Explicit history fixture; publication only persists the outbox.
         var originalReferences = history(id).stream().map(r -> r.get("reference_number")).toList();
 
         historyService.createForTransfer(id);
@@ -67,6 +68,7 @@ class PostgresConstraintsIntegrationTest extends DatabaseIntegrationTestSupport 
         Fixture f = fixture("1000", "500");
         UUID id = pending(f, "200");
         process(f, id);
+        historyService.createForTransfer(id); // Explicit history fixture; publication only persists the outbox.
 
         var failure = assertThrows(DataIntegrityViolationException.class,
                 () -> jdbc.update("DELETE FROM fluxbank.transfers WHERE public_id=?", id));
@@ -96,6 +98,7 @@ class PostgresConstraintsIntegrationTest extends DatabaseIntegrationTestSupport 
         Fixture f = fixture("1000", "500");
         UUID id = pending(f, "200");
         process(f, id);
+        historyService.createForTransfer(id); // Explicit history fixture; publication only persists the outbox.
 
         var failure = assertThrows(DataIntegrityViolationException.class,
                 () -> jdbc.update("UPDATE fluxbank." + table + " SET amount=0"));

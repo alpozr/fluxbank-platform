@@ -5,29 +5,91 @@ import com.fluxbank.transaction.domain.Transaction;
 import com.fluxbank.transaction.domain.TransactionDirection;
 import com.fluxbank.transfer.api.CreateTransferRequest;
 import com.fluxbank.transfer.domain.*;
+import com.fluxbank.transfer.application.TransferCompletedEvent;
+import com.fluxbank.transfer.application.TransferEventPublisher;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.transaction.IllegalTransactionStateException;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
-import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class TransferTransactionsIntegrationTest extends DatabaseIntegrationTestSupport {
+    @Autowired
+    private TransferEventPublisher publisher;
+
+    @Autowired
+    private ApplicationEventPublisher springEvents;
+
     @Test
-    void internalCommitCreatesHistoryOnlyAfterCommitInAnotherTransaction() {
+    void publishingWithoutAFinancialTransactionIsRejected() {
+        UUID id = UUID.randomUUID();
+
+        assertThrows(IllegalTransactionStateException.class, () -> publisher.publishCompleted(id));
+
+        assertTrue(outbox(id).isEmpty());
+    }
+
+    @Test
+    void legacyInMemoryEventNoLongerCreatesHistory() {
+        Fixture f = fixture("1000", "500");
+        UUID id = pending(f, "200");
+        process(f, id);
+
+        tx(() -> {
+            springEvents.publishEvent(new TransferCompletedEvent(id));
+            return null;
+        });
+
+        assertTrue(history(id).isEmpty());
+        assertPendingOutbox(id);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void rejectedOutboxInsertRollsBackFinancialCompletion(boolean external) {
+        Fixture f = fixture("1000", "500");
+        UUID id = external ? externalPending(f, "200") : pending(f, "200");
+        // Test-only database rejection; no production failure hooks or repository mocks.
+        jdbc.execute("ALTER TABLE fluxbank.outbox_event ADD CONSTRAINT test_reject_completed_event "
+                + "CHECK (aggregate_id <> '" + id + "'::uuid)");
+        try {
+            var failure = assertThrows(DataIntegrityViolationException.class, () -> {
+                if (external) {
+                    finalization.complete(id);
+                } else {
+                    process(f, id);
+                }
+            });
+            assertSqlState("23514", failure);
+            assertBalance(f.source(), "1000", external ? "200" : "0", external ? "800" : "1000");
+            assertBalance(f.destination(), "500", "0", "500");
+            assertEquals("PENDING", state(id).get("status"));
+            assertNull(state(id).get("completed_at"));
+            assertTrue(outbox(id).isEmpty());
+            assertTrue(history(id).isEmpty());
+        } finally {
+            jdbc.execute("ALTER TABLE fluxbank.outbox_event DROP CONSTRAINT test_reject_completed_event");
+        }
+    }
+
+    @Test
+    void internalCompletionAndOutboxCommitInTheSameTransactionWithoutCreatingHistory() {
         Fixture f = fixture("1000", "500");
         UUID id = pending(f, "200");
         long financialTransaction = tx(() -> {
             long xid = jdbc.queryForObject("SELECT txid_current()", Long.class);
             process(f, id);
             entityManager.flush();
-            assertTrue(history(id).isEmpty(), "History must not run before financial commit");
+            assertTrue(history(id).isEmpty(), "History must not run during durable publication");
+            assertPendingOutbox(id);
             return xid;
         });
 
@@ -35,13 +97,17 @@ class TransferTransactionsIntegrationTest extends DatabaseIntegrationTestSupport
         assertBalance(f.destination(), "700", "0", "700");
         assertEquals("COMPLETED", state(id).get("status"));
         assertNotNull(state(id).get("completed_at"));
-        var rows = history(id);
-        assertEquals(2, rows.size());
-        assertMovement(rows, f.source().getPublicId(), "DEBIT", "200");
-        assertMovement(rows, f.destination().getPublicId(), "CREDIT", "200");
-        assertEquals(rows.get(0).get("transaction_id"), rows.get(1).get("transaction_id"));
-        assertNotEquals(financialTransaction, rows.get(0).get("transaction_id"),
-                "History must commit in its own transaction");
+        assertPendingOutbox(id);
+        assertTrue(history(id).isEmpty());
+        assertEquals(financialTransaction, outbox(id).get(0).get("transaction_id"));
+        long transferTransaction = jdbc.queryForObject(
+                "SELECT xmin::text::bigint FROM fluxbank.transfers WHERE public_id=?", Long.class, id);
+        assertEquals(financialTransaction, transferTransaction);
+        assertEquals(financialTransaction, jdbc.queryForObject("""
+                SELECT b.xmin::text::bigint FROM fluxbank.account_balances b
+                JOIN fluxbank.accounts a ON a.id=b.account_id WHERE a.public_id=?
+                """, Long.class, f.source().getPublicId()));
+
     }
 
     @Test
@@ -58,10 +124,11 @@ class TransferTransactionsIntegrationTest extends DatabaseIntegrationTestSupport
         assertEquals("PENDING", state(id).get("status"));
         assertNull(state(id).get("completed_at"));
         assertTrue(history(id).isEmpty());
+        assertTrue(outbox(id).isEmpty());
     }
 
     @Test
-    void rolledBackFinancialTransactionDoesNotDeliverCompletedEvent() {
+    void rolledBackFinancialTransactionAlsoRollsBackOutboxInsert() {
         Fixture f = fixture("1000", "500");
         UUID id = pending(f, "200");
 
@@ -69,6 +136,7 @@ class TransferTransactionsIntegrationTest extends DatabaseIntegrationTestSupport
             process(f, id);
             entityManager.flush(); // Both balance updates and COMPLETED reached PostgreSQL, but are uncommitted.
             assertTrue(history(id).isEmpty());
+            assertPendingOutbox(id);
             status.setRollbackOnly();
         });
 
@@ -76,6 +144,7 @@ class TransferTransactionsIntegrationTest extends DatabaseIntegrationTestSupport
         assertBalance(f.destination(), "500", "0", "500");
         assertEquals("PENDING", state(id).get("status"));
         assertTrue(history(id).isEmpty());
+        assertTrue(outbox(id).isEmpty());
     }
 
     @Test
@@ -94,6 +163,7 @@ class TransferTransactionsIntegrationTest extends DatabaseIntegrationTestSupport
         assertBalance(f.source(), "100", "0", "100");
         assertBalance(f.destination(), "500", "0", "500");
         assertTrue(history(id).isEmpty());
+        assertTrue(outbox(id).isEmpty());
     }
 
     @Test
@@ -108,6 +178,7 @@ class TransferTransactionsIntegrationTest extends DatabaseIntegrationTestSupport
         assertEquals("EXTERNAL", jdbc.queryForObject(
                 "SELECT type FROM fluxbank.transfers WHERE public_id=?", String.class, id));
         assertTrue(history(id).isEmpty());
+        assertTrue(outbox(id).isEmpty());
     }
 
     @Test
@@ -129,7 +200,7 @@ class TransferTransactionsIntegrationTest extends DatabaseIntegrationTestSupport
     }
 
     @Test
-    void externalCompletionCommitsSettlementAndOnlySourceDebitHistory() {
+    void externalCompletionCommitsSettlementAndOutboxWithoutCreatingHistory() {
         Fixture f = fixture("1000", "500");
         UUID id = externalPending(f, "300");
 
@@ -138,8 +209,10 @@ class TransferTransactionsIntegrationTest extends DatabaseIntegrationTestSupport
         assertBalance(f.source(), "700", "0", "700");
         assertEquals("COMPLETED", state(id).get("status"));
         assertNotNull(state(id).get("completed_at"));
-        assertEquals(1, history(id).size());
-        assertMovement(history(id), f.source().getPublicId(), "DEBIT", "300");
+        assertTrue(history(id).isEmpty());
+        assertPendingOutbox(id);
+        assertEquals(outbox(id).get(0).get("transaction_id"), jdbc.queryForObject(
+                "SELECT xmin::text::bigint FROM fluxbank.transfers WHERE public_id=?", Long.class, id));
     }
 
     @Test
@@ -154,6 +227,7 @@ class TransferTransactionsIntegrationTest extends DatabaseIntegrationTestSupport
         assertEquals("EXTERNAL_PROVIDER_REJECTED", state(id).get("failure_reason"));
         assertNull(state(id).get("completed_at"));
         assertTrue(history(id).isEmpty());
+        assertTrue(outbox(id).isEmpty());
     }
 
     @Test
@@ -167,6 +241,7 @@ class TransferTransactionsIntegrationTest extends DatabaseIntegrationTestSupport
         assertEquals("PENDING", state(id).get("status"));
         assertNull(state(id).get("failure_reason"));
         assertTrue(history(id).isEmpty());
+        assertTrue(outbox(id).isEmpty());
     }
 
     @ParameterizedTest
@@ -188,10 +263,11 @@ class TransferTransactionsIntegrationTest extends DatabaseIntegrationTestSupport
         assertBalance(f.source(), "1000", "300", "700");
         assertEquals("PENDING", state(id).get("status"));
         assertTrue(history(id).isEmpty());
+        assertTrue(outbox(id).isEmpty());
     }
 
     @Test
-    void historyCreditCollisionRollsBackBothHistoryRowsButNotFinancialCommit() {
+    void explicitHistoryCreationFailureRollsBackBothHistoryRowsButNotFinancialCommit() {
         Fixture f = fixture("1000", "500");
         UUID id = pending(f, "200");
         String first = tx(() -> transactionReferences.nextReference());
@@ -209,7 +285,9 @@ class TransferTransactionsIntegrationTest extends DatabaseIntegrationTestSupport
         });
         rewindReference("transaction_reference_seq", first);
 
-        process(f, id); // AFTER_COMMIT failure is logged by Spring after the financial commit.
+        process(f, id);
+        assertPendingOutbox(id);
+        assertThrows(DataIntegrityViolationException.class, () -> historyService.createForTransfer(id));
 
         assertBalance(f.source(), "800", "0", "800");
         assertBalance(f.destination(), "700", "0", "700");
@@ -220,12 +298,17 @@ class TransferTransactionsIntegrationTest extends DatabaseIntegrationTestSupport
         assertTrue(collision.endsWith("-" + lastAllocated), "Both history references were actually allocated");
     }
 
-    private void assertMovement(List<Map<String, Object>> rows, UUID account, String direction, String amount) {
-        var row = rows.stream().filter(r -> account.equals(r.get("account_public_id"))
-                && direction.equals(r.get("direction"))).findFirst().orElseThrow();
-        assertEquals("TRANSFER", row.get("type"));
-        assertEquals("EUR", row.get("currency"));
-        assertEquals(0, new BigDecimal(amount).compareTo((BigDecimal) row.get("amount")));
-        assertTrue(((String) row.get("reference_number")).matches("TXN-\\d{8}-\\d+"));
+    private void assertPendingOutbox(UUID id) {
+        var rows = outbox(id);
+        assertEquals(1, rows.size());
+        var event = rows.get(0);
+        assertNotNull(event.get("public_id"));
+        assertEquals("TRANSFER_COMPLETED", event.get("event_type"));
+        assertEquals(id, event.get("aggregate_id"));
+        assertEquals(id.toString(), event.get("transfer_public_id"));
+        assertEquals("PENDING", event.get("status"));
+        assertEquals(0, event.get("attempts"));
+        assertNull(event.get("processed_at"));
+        assertNull(event.get("last_error"));
     }
 }
