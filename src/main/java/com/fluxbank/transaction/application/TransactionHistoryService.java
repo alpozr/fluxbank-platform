@@ -37,7 +37,7 @@ public class TransactionHistoryService {
         this.referenceGenerator = referenceGenerator;
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Transactional(propagation = Propagation.REQUIRED)
     public void createForTransfer(UUID transferPublicId) {
         Transfer transfer = transferRepository.findByPublicId(transferPublicId)
                 .orElseThrow(() -> new IllegalStateException("Transfer not found"));

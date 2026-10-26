@@ -60,7 +60,7 @@ abstract class DatabaseIntegrationTestSupport extends PostgresIntegrationTest {
     @AfterEach
     void cleanCommittedData() {
         jdbc.execute("""
-                TRUNCATE TABLE fluxbank.transactions, fluxbank.transfers, fluxbank.account_balances,
+                TRUNCATE TABLE fluxbank.outbox_event, fluxbank.transactions, fluxbank.transfers, fluxbank.account_balances,
                 fluxbank.beneficiaries, fluxbank.accounts, fluxbank.users RESTART IDENTITY
                 """);
     }
@@ -141,6 +141,14 @@ abstract class DatabaseIntegrationTestSupport extends PostgresIntegrationTest {
                        h.reference_number, h.xmin::text::bigint AS transaction_id
                 FROM fluxbank.transactions h JOIN fluxbank.accounts a ON a.id=h.account_id
                 JOIN fluxbank.transfers t ON t.id=h.transfer_id WHERE t.public_id=? ORDER BY h.direction
+                """, transferId);
+    }
+
+    protected List<Map<String, Object>> outbox(UUID transferId) {
+        return jdbc.queryForList("""
+                SELECT public_id, event_type, aggregate_id, status, attempts, processed_at, last_error,
+                       payload->>'transferPublicId' AS transfer_public_id, xmin::text::bigint AS transaction_id
+                FROM fluxbank.outbox_event WHERE aggregate_id=?
                 """, transferId);
     }
 
