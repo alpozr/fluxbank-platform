@@ -6,6 +6,14 @@ spring:
     hibernate:
       ddl-auto: validate
 
+outbox:
+  polling:
+    # Integration tests explicitly control claiming and processing transactions.
+    enabled: false
+  recovery:
+    # Recovery tests explicitly control stale-event transitions.
+    enabled: false
+
 security:
   jwt:
     # Test-only key so the application context does not require JWT_SECRET.
