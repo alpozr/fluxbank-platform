@@ -1,5 +1,10 @@
 package com.fluxbank.integration;
 
+import com.fluxbank.transfer.infrastructure.kafka.TransferCompletedKafkaEvent;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import static org.mockito.Mockito.*;
+
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fluxbank.outbox.application.OutboxClaimService;
 import com.fluxbank.outbox.application.OutboxProcessor;
@@ -24,6 +29,9 @@ import java.util.concurrent.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class OutboxClaimIntegrationTest extends DatabaseIntegrationTestSupport {
+    @MockitoBean
+    private KafkaTemplate<String, TransferCompletedKafkaEvent> kafkaTemplate;
+
     @Autowired private OutboxClaimService claims;
     @Autowired private OutboxEventRepository events;
     @Autowired private OutboxProcessor processor;
@@ -33,6 +41,8 @@ class OutboxClaimIntegrationTest extends DatabaseIntegrationTestSupport {
     @BeforeEach
     void startWorkers() {
         workers = Executors.newFixedThreadPool(2);
+        when(kafkaTemplate.send(anyString(), anyString(), any(TransferCompletedKafkaEvent.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
     }
 
     @AfterEach
@@ -167,36 +177,29 @@ class OutboxClaimIntegrationTest extends DatabaseIntegrationTestSupport {
         assertEquals("PROCESSED", outbox(transferId).get(0).get("status"));
         assertNotEquals(claimXid, outbox(transferId).get(0).get("transaction_id"));
         assertEquals(claimed, events.findByPublicId(id).orElseThrow().getClaimedAt());
-        assertEquals(2, history(transferId).size());
-        for (var row : history(transferId)) {
-            assertEquals(outbox(transferId).get(0).get("transaction_id"), row.get("transaction_id"));
-        }
+        assertTrue(history(transferId).isEmpty());
     }
 
     @Test
-    void permanentProcessingFailureRollsBackHistoryAndRecordsTerminalFailure() {
+    void permanentPublishFailureRecordsTerminalFailureWithoutChangingBalances() {
         Fixture f = fixture("1000", "500");
         UUID transferId = pending(f, "200");
         process(f, transferId);
         UUID id = claims.claimBatch(1).get(0);
         var claimedAt = events.findByPublicId(id).orElseThrow().getClaimedAt();
-        jdbc.execute("ALTER TABLE fluxbank.transactions ADD CONSTRAINT test_claim_reject_credit CHECK (direction <> 'CREDIT')");
-        try {
-            var failure = assertThrows(DataIntegrityViolationException.class, () -> processor.process(id));
-            assertSqlState("23514", failure);
-            assertTrue(history(transferId).isEmpty());
-            OutboxEvent event = events.findByPublicId(id).orElseThrow();
-            assertEquals(OutboxStatus.FAILED, event.getStatus());
-            assertEquals(claimedAt, event.getClaimedAt());
-            assertNull(event.getProcessedAt());
-            assertEquals(1, event.getAttempts());
-            assertNotNull(event.getLastError());
-            assertTrue(claims.claimBatch(1).isEmpty(), "FAILED events are terminal");
-            assertBalance(f.source(), "800", "0", "800");
-            assertBalance(f.destination(), "700", "0", "700");
-        } finally {
-            jdbc.execute("ALTER TABLE fluxbank.transactions DROP CONSTRAINT test_claim_reject_credit");
-        }
+        when(kafkaTemplate.send(anyString(), anyString(), any(TransferCompletedKafkaEvent.class)))
+                .thenReturn(CompletableFuture.failedFuture(new org.apache.kafka.common.errors.SerializationException("sensitive")));
+        assertThrows(CompletionException.class, () -> processor.process(id));
+        assertTrue(history(transferId).isEmpty());
+        OutboxEvent event = events.findByPublicId(id).orElseThrow();
+        assertEquals(OutboxStatus.FAILED, event.getStatus());
+        assertEquals(claimedAt, event.getClaimedAt());
+        assertNull(event.getProcessedAt());
+        assertEquals(1, event.getAttempts());
+        assertNotNull(event.getLastError());
+        assertTrue(claims.claimBatch(1).isEmpty());
+        assertBalance(f.source(), "800", "0", "800");
+        assertBalance(f.destination(), "700", "0", "700");
     }
 
     private List<UUID> seed(int count) {

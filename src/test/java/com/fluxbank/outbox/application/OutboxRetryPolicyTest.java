@@ -11,6 +11,19 @@ class OutboxRetryPolicyTest {
             Duration.ofSeconds(30), Duration.ofMinutes(5));
 
     @Test
+    void classifiesKnownKafkaWrappersWithoutRetryingPermanentErrors() {
+        var transientFailure = new java.util.concurrent.CompletionException(
+                new org.springframework.kafka.KafkaException("send failed", new org.apache.kafka.common.errors.TimeoutException("secret")));
+        assertTrue(policy.isRetryable(transientFailure));
+        assertEquals("Transient Kafka publication failure", policy.sanitizedError(transientFailure));
+        assertFalse(policy.isRetryable(new java.util.concurrent.CompletionException(
+                new org.apache.kafka.common.errors.SerializationException("secret"))));
+        assertFalse(policy.isRetryable(new java.util.concurrent.CompletionException(
+                new org.apache.kafka.common.errors.TopicAuthorizationException("secret"))));
+        assertFalse(policy.isRetryable(new RuntimeException(new org.apache.kafka.common.errors.TimeoutException("secret"))));
+    }
+
+    @Test
     void exponentialBackoffIsDeterministicAndCapped() {
         assertEquals(Duration.ofSeconds(5), policy.delay(1));
         assertEquals(Duration.ofSeconds(10), policy.delay(2));
