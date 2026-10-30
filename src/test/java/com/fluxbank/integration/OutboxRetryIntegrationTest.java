@@ -1,5 +1,10 @@
 package com.fluxbank.integration;
 
+import com.fluxbank.transfer.infrastructure.kafka.TransferCompletedKafkaEvent;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import static org.mockito.Mockito.*;
+
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fluxbank.outbox.application.*;
 import com.fluxbank.outbox.domain.OutboxEvent;
@@ -7,7 +12,7 @@ import com.fluxbank.outbox.domain.OutboxStatus;
 import com.fluxbank.outbox.repository.OutboxEventRepository;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.dao.TransientDataAccessException;
+
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
@@ -16,6 +21,9 @@ import java.util.concurrent.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class OutboxRetryIntegrationTest extends DatabaseIntegrationTestSupport {
+    @MockitoBean
+    private KafkaTemplate<String, TransferCompletedKafkaEvent> kafkaTemplate;
+
     @Autowired private OutboxProcessor processor;
     @Autowired private OutboxClaimService claims;
     @Autowired private OutboxRecoveryService recovery;
@@ -26,29 +34,29 @@ class OutboxRetryIntegrationTest extends DatabaseIntegrationTestSupport {
     @BeforeEach
     void startWorkers() {
         workers = Executors.newFixedThreadPool(2);
+        when(kafkaTemplate.send(anyString(), anyString(), any(TransferCompletedKafkaEvent.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
     }
 
     @AfterEach
-    void finishWorkersAndRemoveTestFailureTrigger() throws InterruptedException {
+    void finishWorkers() throws InterruptedException {
         workers.shutdown();
         if (!workers.awaitTermination(20, TimeUnit.SECONDS)) {
             workers.shutdownNow();
             assertTrue(workers.awaitTermination(20, TimeUnit.SECONDS));
         }
-        jdbc.execute("DROP TRIGGER IF EXISTS test_outbox_transient ON fluxbank.transactions");
-        jdbc.execute("DROP FUNCTION IF EXISTS fluxbank.test_outbox_transient()");
     }
 
     @Test
-    void transientFailureRollsBackHistorySchedulesBackoffAndLaterRetrySucceedsIdempotently() {
+    void transientKafkaFailureSchedulesBackoffAndLaterRetrySucceedsWithoutHistory() {
         Fixture f = fixture("1000", "500");
         UUID transfer = pending(f, "200");
         process(f, transfer);
         UUID id = claims.claimBatch(1).get(0);
-        installTransientCreditFailure();
+        installTransientKafkaFailure();
         Instant before = Instant.now();
 
-        assertThrows(TransientDataAccessException.class, () -> processor.process(id));
+        assertThrows(CompletionException.class, () -> processor.process(id));
 
         OutboxEvent failedAttempt = event(id);
         assertEquals(OutboxStatus.PENDING, failedAttempt.getStatus());
@@ -59,7 +67,7 @@ class OutboxRetryIntegrationTest extends DatabaseIntegrationTestSupport {
         assertFalse(failedAttempt.getNextAttemptAt().isAfter(Instant.now().plus(policy.delay(1))));
         assertNotNull(failedAttempt.getLastError());
         assertFalse(failedAttempt.getLastError().contains("sensitive"));
-        assertTrue(history(transfer).isEmpty(), "The debit must roll back when the credit fails");
+        assertTrue(history(transfer).isEmpty(), "Publishing must not create history");
         assertBalance(f.source(), "800", "0", "800");
         assertBalance(f.destination(), "700", "0", "700");
         assertEquals("COMPLETED", state(transfer).get("status"));
@@ -69,7 +77,8 @@ class OutboxRetryIntegrationTest extends DatabaseIntegrationTestSupport {
         assertTrue(claims.claimBatch(1).isEmpty());
         processor.process(id); // Direct processing must also respect nextAttemptAt.
         assertEquals(1, event(id).getAttempts());
-        jdbc.execute("DROP TRIGGER test_outbox_transient ON fluxbank.transactions");
+        when(kafkaTemplate.send(anyString(), anyString(), any(TransferCompletedKafkaEvent.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
         makeDue(id);
         assertEquals(List.of(id), claims.claimBatch(1));
         processor.process(id);
@@ -79,12 +88,10 @@ class OutboxRetryIntegrationTest extends DatabaseIntegrationTestSupport {
         assertNull(event(id).getNextAttemptAt());
         assertNull(event(id).getLastError());
         assertNotNull(event(id).getProcessedAt());
-        assertEquals(2, history(transfer).size());
-        for (var movement : history(transfer)) {
-            assertEquals(outbox(transfer).get(0).get("transaction_id"), movement.get("transaction_id"));
-        }
+        assertTrue(history(transfer).isEmpty());
         processor.process(id);
-        assertEquals(2, history(transfer).size());
+        assertTrue(history(transfer).isEmpty());
+        verify(kafkaTemplate, times(2)).send(anyString(), anyString(), any(TransferCompletedKafkaEvent.class));
     }
 
     @Test
@@ -93,11 +100,11 @@ class OutboxRetryIntegrationTest extends DatabaseIntegrationTestSupport {
         UUID transfer = pending(f, "200");
         process(f, transfer);
         UUID id = (UUID) outbox(transfer).get(0).get("public_id");
-        installTransientCreditFailure();
+        installTransientKafkaFailure();
         for (int attempt = 1; attempt <= policy.getMaxAttempts(); attempt++) {
             makeDue(id);
             assertEquals(List.of(id), claims.claimBatch(1));
-            assertThrows(TransientDataAccessException.class, () -> processor.process(id));
+            assertThrows(CompletionException.class, () -> processor.process(id));
             assertEquals(attempt, event(id).getAttempts());
             assertEquals(attempt < policy.getMaxAttempts() ? OutboxStatus.PENDING : OutboxStatus.FAILED,
                     event(id).getStatus());
@@ -115,6 +122,7 @@ class OutboxRetryIntegrationTest extends DatabaseIntegrationTestSupport {
         for (String type : List.of("TRANSFER_COMPLETED", "UNKNOWN")) {
             UUID id = tx(() -> events.saveAndFlush(OutboxEvent.create(type, UUID.randomUUID(),
                     JsonNodeFactory.instance.objectNode().put("transferPublicId", "sensitive-invalid-uuid"))).getPublicId());
+            assertEquals(List.of(id), claims.claimBatch(1));
             assertThrows(RuntimeException.class, () -> processor.process(id));
             assertEquals(OutboxStatus.FAILED, event(id).getStatus());
             assertEquals(1, event(id).getAttempts());
@@ -207,16 +215,9 @@ class OutboxRetryIntegrationTest extends DatabaseIntegrationTestSupport {
         assertEquals(1, event(id).getAttempts());
     }
 
-    private void installTransientCreditFailure() {
-        jdbc.execute("""
-                CREATE FUNCTION fluxbank.test_outbox_transient() RETURNS trigger LANGUAGE plpgsql AS $$
-                BEGIN RAISE EXCEPTION 'sensitive transient database details' USING ERRCODE='40001'; END;
-                $$
-                """);
-        jdbc.execute("""
-                CREATE TRIGGER test_outbox_transient BEFORE INSERT ON fluxbank.transactions
-                FOR EACH ROW WHEN (NEW.direction='CREDIT') EXECUTE FUNCTION fluxbank.test_outbox_transient()
-                """);
+    private void installTransientKafkaFailure() {
+        when(kafkaTemplate.send(anyString(), anyString(), any(TransferCompletedKafkaEvent.class)))
+                .thenReturn(CompletableFuture.failedFuture(new org.apache.kafka.common.errors.TimeoutException("sensitive Kafka details")));
     }
 
     private UUID seed() {

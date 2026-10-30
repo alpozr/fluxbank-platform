@@ -1,124 +1,65 @@
 package com.fluxbank.outbox.application;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fluxbank.outbox.domain.OutboxEvent;
 import com.fluxbank.outbox.domain.OutboxStatus;
 import com.fluxbank.outbox.repository.OutboxEventRepository;
-import com.fluxbank.transaction.application.TransactionHistoryService;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
-
+import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
-
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class OutboxProcessingTransactionTest {
     private final OutboxEventRepository events = mock(OutboxEventRepository.class);
-    private final TransactionHistoryService history = mock(TransactionHistoryService.class);
-    private final OutboxProcessingTransaction processor = new OutboxProcessingTransaction(events, history);
+    private final OutboxProcessingTransaction completion = new OutboxProcessingTransaction(events);
 
     @Test
-    void staleAttemptCannotProcessANewerClaim() {
-        OutboxEvent event = event("TRANSFER_COMPLETED", UUID.randomUUID());
+    void marksMatchingProcessingAttemptProcessed() {
+        OutboxEvent event = event();
         event.claim();
-        var oldAttempt = OutboxAttempt.from(event);
-        event.recordFailure(true, 3, java.time.Instant.now(), "Stale claim expired");
-        event.claim();
-
-        processor.process(oldAttempt);
-
-        verifyNoInteractions(history);
-        assertEquals(OutboxStatus.PROCESSING, event.getStatus());
-        assertEquals(1, event.getAttempts());
-    }
-
-    @Test
-    void createsHistoryBeforeMarkingEventProcessed() {
-        OutboxEvent event = event("TRANSFER_COMPLETED", UUID.randomUUID());
-        doAnswer(invocation -> {
-            assertEquals(OutboxStatus.PENDING, event.getStatus());
-            assertNull(event.getProcessedAt());
-            return null;
-        }).when(history).createForTransfer(event.getAggregateId());
-
-        processor.process(OutboxAttempt.from(event));
-
-        verify(history).createForTransfer(event.getAggregateId());
+        completion.markProcessed(OutboxAttempt.from(event));
         assertEquals(OutboxStatus.PROCESSED, event.getStatus());
         assertNotNull(event.getProcessedAt());
     }
 
     @Test
-    void historyFailureLeavesEventPendingAndPropagates() {
-        OutboxEvent event = event("TRANSFER_COMPLETED", UUID.randomUUID());
-        var failure = new IllegalStateException("History failure");
-        doThrow(failure).when(history).createForTransfer(event.getAggregateId());
+    void staleAcknowledgementCannotCompleteNewerClaim() {
+        OutboxEvent event = event();
+        event.claim();
+        var oldAttempt = OutboxAttempt.from(event);
+        event.recordFailure(true, 3, Instant.now(), "Stale claim expired");
+        event.claim();
+        var newClaim = event.getClaimedAt();
+        completion.markProcessed(oldAttempt);
+        assertEquals(OutboxStatus.PROCESSING, event.getStatus());
+        assertEquals(newClaim, event.getClaimedAt());
+        assertEquals(1, event.getAttempts());
+        assertNull(event.getProcessedAt());
+    }
 
-        assertSame(failure, assertThrows(IllegalStateException.class, () -> processor.process(OutboxAttempt.from(event))));
-
+    @Test
+    void pendingEventCannotBeMarkedProcessedWithoutClaim() {
+        OutboxEvent event = event();
+        completion.markProcessed(OutboxAttempt.from(event));
         assertEquals(OutboxStatus.PENDING, event.getStatus());
         assertNull(event.getProcessedAt());
     }
 
     @Test
-    void processedEventIsANoOp() {
-        OutboxEvent event = event("TRANSFER_COMPLETED", UUID.randomUUID());
-        event.markProcessed();
-        var processedAt = event.getProcessedAt();
-
-        processor.process(OutboxAttempt.from(event));
-
-        verifyNoInteractions(history);
-        assertEquals(processedAt, event.getProcessedAt());
+    void processedEventKeepsItsOriginalTimestamp() {
+        OutboxEvent event = event();
+        event.claim();
+        var attempt = OutboxAttempt.from(event);
+        completion.markProcessed(attempt);
+        var timestamp = event.getProcessedAt();
+        completion.markProcessed(attempt);
+        assertEquals(timestamp, event.getProcessedAt());
     }
 
-    @Test
-    void rejectsMissingEvent() {
-        UUID id = UUID.randomUUID();
-        when(events.findByPublicIdForUpdate(id)).thenReturn(Optional.empty());
-        assertThrows(IllegalStateException.class, () -> processor.process(new OutboxAttempt(id, OutboxStatus.PENDING, 0, null)));
-        verifyNoInteractions(history);
-    }
-
-    @Test
-    void rejectsUnsupportedEventType() {
-        OutboxEvent event = event("UNSUPPORTED", UUID.randomUUID());
-        assertThrows(IllegalStateException.class, () -> processor.process(OutboxAttempt.from(event)));
-        assertEquals(OutboxStatus.PENDING, event.getStatus());
-        verifyNoInteractions(history);
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {"{}", "{\"transferPublicId\":null}", "{\"transferPublicId\":42}", "{\"transferPublicId\":\"invalid\"}"})
-    void rejectsInvalidPayloadWithoutCreatingHistory(String json) throws Exception {
-        OutboxEvent event = OutboxEvent.create("TRANSFER_COMPLETED", UUID.randomUUID(),
-                new ObjectMapper().readTree(json));
-        when(events.findByPublicIdForUpdate(event.getPublicId())).thenReturn(Optional.of(event));
-
-        assertThrows(IllegalArgumentException.class, () -> processor.process(OutboxAttempt.from(event)));
-
-        assertEquals(OutboxStatus.PENDING, event.getStatus());
-        verifyNoInteractions(history);
-    }
-
-    @Test
-    void rejectsPayloadForAnotherAggregate() {
-        UUID aggregate = UUID.randomUUID();
-        OutboxEvent event = OutboxEvent.create("TRANSFER_COMPLETED", aggregate,
-                JsonNodeFactory.instance.objectNode().put("transferPublicId", UUID.randomUUID().toString()));
-        when(events.findByPublicIdForUpdate(event.getPublicId())).thenReturn(Optional.of(event));
-
-        assertThrows(IllegalArgumentException.class, () -> processor.process(OutboxAttempt.from(event)));
-        verifyNoInteractions(history);
-    }
-
-    private OutboxEvent event(String type, UUID transferId) {
-        OutboxEvent event = OutboxEvent.create(type, transferId,
-                JsonNodeFactory.instance.objectNode().put("transferPublicId", transferId.toString()));
+    private OutboxEvent event() {
+        var event = OutboxEvent.create("TRANSFER_COMPLETED", UUID.randomUUID(), JsonNodeFactory.instance.objectNode());
         when(events.findByPublicIdForUpdate(event.getPublicId())).thenReturn(Optional.of(event));
         return event;
     }

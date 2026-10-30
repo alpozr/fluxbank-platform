@@ -2,6 +2,16 @@ spring:
   application:
     name: fluxbank-backend
 
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all
+      properties:
+        "[enable.idempotence]": true
+        "[spring.json.add.type.headers]": false
+
   datasource:
     url: ${DB_URL}
     username: ${DB_USERNAME}
@@ -20,6 +30,10 @@ spring:
     locations: classpath:db/migration
     schemas: fluxbank
     default-schema: fluxbank
+
+kafka:
+  topics:
+    transfer-events: ${KAFKA_TRANSFER_EVENTS_TOPIC:fluxbank.transfer-events.v1}
 
 security:
   jwt:

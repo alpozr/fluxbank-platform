@@ -1,36 +1,50 @@
 package com.fluxbank.integration;
 
-import com.fasterxml.jackson.databind.node.JsonNodeFactory;
-import com.fluxbank.outbox.application.OutboxProcessor;
-import com.fluxbank.outbox.domain.OutboxEvent;
+import com.fluxbank.outbox.application.*;
+import com.fluxbank.outbox.domain.OutboxStatus;
 import com.fluxbank.outbox.repository.OutboxEventRepository;
+import com.fluxbank.transfer.infrastructure.kafka.TransferCompletedKafkaEvent;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.support.SendResult;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-import java.math.BigDecimal;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.*;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 class OutboxProcessorIntegrationTest extends DatabaseIntegrationTestSupport {
-    @Autowired
-    private OutboxProcessor processor;
+    @MockitoBean private KafkaTemplate<String, TransferCompletedKafkaEvent> kafkaTemplate;
+    @Autowired private OutboxProcessor processor;
+    @Autowired private OutboxClaimService claims;
+    @Autowired private OutboxRecoveryService recovery;
+    @Autowired private OutboxEventRepository events;
 
-    @Autowired
-    private OutboxEventRepository events;
+    @BeforeEach
+    void acknowledgeKafkaSends() {
+        when(kafkaTemplate.send(anyString(), anyString(), any(TransferCompletedKafkaEvent.class)))
+                .thenAnswer(invocation -> {
+                    assertFalse(TransactionSynchronizationManager.isActualTransactionActive(), "Kafka send must have no database transaction");
+                    return CompletableFuture.completedFuture(null);
+                });
+    }
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void historyAndProcessedStateCommitInTheSameTransaction(boolean external) {
+    void acknowledgedPublishMarksClaimProcessedWithoutCreatingHistory(boolean external) {
         Fixture f = fixture("1000", "500");
         UUID transferId = complete(f, external);
-        UUID eventId = eventId(transferId);
-        assertTrue(history(transferId).isEmpty());
-        long financialXid = jdbc.queryForObject(
-                "SELECT xmin::text::bigint FROM fluxbank.transfers WHERE public_id=?", Long.class, transferId);
+        UUID eventId = claims.claimBatch(1).get(0);
+        Object claimXid = outbox(transferId).get(0).get("transaction_id");
 
         processor.process(eventId);
 
@@ -38,78 +52,103 @@ class OutboxProcessorIntegrationTest extends DatabaseIntegrationTestSupport {
         assertEquals("PROCESSED", event.get("status"));
         assertNotNull(event.get("processed_at"));
         assertEquals(0, event.get("attempts"));
-        assertNull(event.get("last_error"));
-        var movements = history(transferId);
-        assertEquals(external ? 1 : 2, movements.size());
-        for (var movement : movements) {
-            assertEquals(event.get("transaction_id"), movement.get("transaction_id"),
-                    "History rows and outbox status must have the same PostgreSQL transaction ID");
-            assertNotEquals(financialXid, movement.get("transaction_id"));
-            assertEquals("TRANSFER", movement.get("type"));
-            assertEquals("EUR", movement.get("currency"));
-            assertEquals(0, new BigDecimal("200").compareTo((BigDecimal) movement.get("amount")));
-            boolean source = f.source().getPublicId().equals(movement.get("account_public_id"));
-            assertEquals(source ? "DEBIT" : "CREDIT", movement.get("direction"));
-            if (!source) {
-                assertFalse(external);
-                assertEquals(f.destination().getPublicId(), movement.get("account_public_id"));
-            }
-        }
-        assertTrue(movements.stream().anyMatch(m -> f.source().getPublicId().equals(m.get("account_public_id"))));
+        assertNotEquals(claimXid, event.get("transaction_id"));
+        assertTrue(history(transferId).isEmpty());
         assertBalance(f.source(), "800", "0", "800");
         assertBalance(f.destination(), external ? "500" : "700", "0", external ? "500" : "700");
         assertEquals("COMPLETED", state(transferId).get("status"));
+        verify(kafkaTemplate).send(eq("fluxbank.transfer-events.v1"), eq(transferId.toString()),
+                argThat(message -> eventId.equals(message.eventId()) && transferId.equals(message.transferPublicId())));
     }
 
     @Test
-    void replayAndAnotherEventForSameTransferDoNotDuplicateHistory() {
+    void onlyClaimedEventsPublishAndProcessedReplayDoesNothing() {
         Fixture f = fixture("1000", "500");
         UUID transferId = complete(f, false);
-        UUID original = eventId(transferId);
-        processor.process(original);
-        var references = history(transferId).stream().map(m -> m.get("reference_number")).toList();
-        var processedAt = events.findByPublicId(original).orElseThrow().getProcessedAt();
-
-        processor.process(original);
-        UUID duplicate = tx(() -> events.saveAndFlush(OutboxEvent.create("TRANSFER_COMPLETED", transferId,
-                JsonNodeFactory.instance.objectNode().put("transferPublicId", transferId.toString()))).getPublicId());
-        processor.process(duplicate);
-
-        assertEquals(references, history(transferId).stream().map(m -> m.get("reference_number")).toList());
-        assertEquals(processedAt, events.findByPublicId(original).orElseThrow().getProcessedAt());
-        assertTrue(outbox(transferId).stream().allMatch(e -> "PROCESSED".equals(e.get("status"))));
-        assertEquals(2, history(transferId).size());
-    }
-
-    @Test
-    void permanentCreditInsertFailureRollsBackDebitAndMarksEventFailed() {
-        Fixture f = fixture("1000", "500");
-        UUID transferId = complete(f, false);
-        UUID eventId = eventId(transferId);
-        // Reject the second history insert using real PostgreSQL, without production failure hooks.
-        jdbc.execute("ALTER TABLE fluxbank.transactions ADD CONSTRAINT test_reject_credit CHECK (direction <> 'CREDIT')");
-        try {
-            var failure = assertThrows(DataIntegrityViolationException.class, () -> processor.process(eventId));
-            assertSqlState("23514", failure);
-            assertFailedWithoutHistory(transferId);
-        } finally {
-            jdbc.execute("ALTER TABLE fluxbank.transactions DROP CONSTRAINT test_reject_credit");
-        }
-        processor.process(eventId); // A non-transient integrity failure is terminal.
+        UUID id = (UUID) outbox(transferId).get(0).get("public_id");
+        processor.process(id);
+        verifyNoInteractions(kafkaTemplate);
+        claims.claimBatch(1);
+        processor.process(id);
+        var processedAt = events.findByPublicId(id).orElseThrow().getProcessedAt();
+        processor.process(id);
+        verify(kafkaTemplate).send(anyString(), anyString(), any(TransferCompletedKafkaEvent.class));
+        assertEquals(processedAt, events.findByPublicId(id).orElseThrow().getProcessedAt());
         assertTrue(history(transferId).isEmpty());
-        assertEquals("FAILED", outbox(transferId).get(0).get("status"));
     }
 
     @Test
-    void outboxStatusUpdateFailureRollsBackAllHistoryInserts() {
+    void waitingForAcknowledgementHoldsNoDatabaseTransactionOrRowLock() throws Exception {
         Fixture f = fixture("1000", "500");
         UUID transferId = complete(f, false);
-        UUID eventId = eventId(transferId);
+        UUID id = claims.claimBatch(1).get(0);
+        var acknowledgement = new CompletableFuture<SendResult<String, TransferCompletedKafkaEvent>>();
+        CountDownLatch sending = new CountDownLatch(1);
+        when(kafkaTemplate.send(anyString(), anyString(), any(TransferCompletedKafkaEvent.class)))
+                .thenAnswer(invocation -> {
+                    assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+                    sending.countDown();
+                    return acknowledgement;
+                });
+        ExecutorService worker = Executors.newSingleThreadExecutor();
+        Future<?> processing = worker.submit(() -> processor.process(id));
+        try {
+            assertTrue(sending.await(10, TimeUnit.SECONDS));
+            assertFalse(processing.isDone());
+            assertEquals(OutboxStatus.PROCESSING, events.findByPublicId(id).orElseThrow().getStatus());
+            tx(() -> jdbc.queryForObject("SELECT public_id FROM fluxbank.outbox_event WHERE public_id=? FOR UPDATE NOWAIT",
+                    UUID.class, id));
+            acknowledgement.complete(null);
+            processing.get(10, TimeUnit.SECONDS);
+            assertEquals(OutboxStatus.PROCESSED, events.findByPublicId(id).orElseThrow().getStatus());
+            assertTrue(history(transferId).isEmpty());
+        } finally {
+            acknowledgement.completeExceptionally(new IllegalStateException("Test finished"));
+            worker.shutdown();
+            assertTrue(worker.awaitTermination(20, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void recoveryDuringPublishPreventsOldAcknowledgementFromCompletingNewClaim() {
+        Fixture f = fixture("1000", "500");
+        UUID transferId = complete(f, false);
+        UUID id = claims.claimBatch(1).get(0);
+        when(kafkaTemplate.send(anyString(), anyString(), any(TransferCompletedKafkaEvent.class)))
+                .thenAnswer(invocation -> {
+                    assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+                    jdbc.update("UPDATE fluxbank.outbox_event SET claimed_at=CURRENT_TIMESTAMP - INTERVAL '1 day' WHERE public_id=?", id);
+                    assertEquals(List.of(id), recovery.recoverStaleBatch(1));
+                    jdbc.update("UPDATE fluxbank.outbox_event SET next_attempt_at=CURRENT_TIMESTAMP - INTERVAL '1 second' WHERE public_id=?", id);
+                    assertEquals(List.of(id), claims.claimBatch(1));
+                    return CompletableFuture.completedFuture(null);
+                }).thenReturn(CompletableFuture.completedFuture(null));
+
+        processor.process(id);
+
+        assertEquals(OutboxStatus.PROCESSING, events.findByPublicId(id).orElseThrow().getStatus());
+        assertNull(events.findByPublicId(id).orElseThrow().getProcessedAt());
+        assertEquals(1, events.findByPublicId(id).orElseThrow().getAttempts());
+        processor.process(id); // Intentional at-least-once publication, same logical event ID.
+        assertEquals(OutboxStatus.PROCESSED, events.findByPublicId(id).orElseThrow().getStatus());
+        verify(kafkaTemplate, times(2)).send(anyString(), anyString(), argThat(message -> id.equals(message.eventId())));
+        assertTrue(history(transferId).isEmpty());
+    }
+
+    @Test
+    void acknowledgedSendAndDatabaseCompletionAreNotADistributedTransaction() {
+        Fixture f = fixture("1000", "500");
+        UUID transferId = complete(f, false);
+        UUID id = claims.claimBatch(1).get(0);
         jdbc.execute("ALTER TABLE fluxbank.outbox_event ADD CONSTRAINT test_reject_processed CHECK (status <> 'PROCESSED')");
         try {
-            var failure = assertThrows(DataIntegrityViolationException.class, () -> processor.process(eventId));
+            var failure = assertThrows(DataIntegrityViolationException.class, () -> processor.process(id));
             assertSqlState("23514", failure);
-            assertFailedWithoutHistory(transferId);
+            verify(kafkaTemplate).send(anyString(), anyString(), any(TransferCompletedKafkaEvent.class));
+            assertEquals(OutboxStatus.FAILED, events.findByPublicId(id).orElseThrow().getStatus());
+            assertNull(events.findByPublicId(id).orElseThrow().getProcessedAt());
+            assertTrue(history(transferId).isEmpty());
+            assertEquals("COMPLETED", state(transferId).get("status"));
         } finally {
             jdbc.execute("ALTER TABLE fluxbank.outbox_event DROP CONSTRAINT test_reject_processed");
         }
@@ -123,17 +162,5 @@ class OutboxProcessorIntegrationTest extends DatabaseIntegrationTestSupport {
             process(f, transferId);
         }
         return transferId;
-    }
-
-    private UUID eventId(UUID transferId) {
-        return (UUID) outbox(transferId).get(0).get("public_id");
-    }
-
-    private void assertFailedWithoutHistory(UUID transferId) {
-        assertTrue(history(transferId).isEmpty());
-        assertEquals("FAILED", outbox(transferId).get(0).get("status"));
-        assertNull(outbox(transferId).get(0).get("processed_at"));
-        assertEquals("COMPLETED", state(transferId).get("status"));
-        assertNotNull(state(transferId).get("completed_at"));
     }
 }

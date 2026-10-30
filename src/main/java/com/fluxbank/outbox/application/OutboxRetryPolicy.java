@@ -6,6 +6,10 @@ import org.springframework.dao.TransientDataAccessException;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.CannotCreateTransactionException;
 import java.time.Duration;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
+import org.apache.kafka.common.errors.RetriableException;
+import org.springframework.kafka.KafkaException;
 
 @Component
 public class OutboxRetryPolicy {
@@ -43,14 +47,18 @@ public class OutboxRetryPolicy {
     }
 
     public boolean isRetryable(RuntimeException failure) {
-        return failure instanceof TransientDataAccessException
-                || failure instanceof RecoverableDataAccessException
-                || failure instanceof CannotCreateTransactionException;
+        Throwable cause = processingCause(failure);
+        return cause instanceof TransientDataAccessException
+                || cause instanceof RecoverableDataAccessException
+                || cause instanceof CannotCreateTransactionException
+                || cause instanceof RetriableException;
     }
 
     public String sanitizedError(RuntimeException failure) {
         if (isRetryable(failure)) {
-            return "Transient database or transaction infrastructure failure";
+            return processingCause(failure) instanceof RetriableException
+                    ? "Transient Kafka publication failure"
+                    : "Transient database or transaction infrastructure failure";
         }
         if (failure instanceof IllegalArgumentException) {
             return "Invalid outbox event data";
@@ -59,6 +67,14 @@ public class OutboxRetryPolicy {
             return "Unsupported event or invalid transaction history state";
         }
         return "Non-retryable processing failure";
+    }
+
+    private Throwable processingCause(Throwable failure) {
+        while ((failure instanceof CompletionException || failure instanceof ExecutionException || failure instanceof KafkaException)
+                && failure.getCause() != null && failure.getCause() != failure) {
+            failure = failure.getCause();
+        }
+        return failure;
     }
 
     public int getMaxAttempts() {
