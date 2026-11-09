@@ -60,7 +60,7 @@ abstract class DatabaseIntegrationTestSupport extends PostgresIntegrationTest {
     @AfterEach
     void cleanCommittedData() {
         jdbc.execute("""
-                TRUNCATE TABLE fluxbank.outbox_event, fluxbank.transactions, fluxbank.transfers, fluxbank.account_balances,
+                TRUNCATE TABLE fluxbank.processed_event, fluxbank.outbox_event, fluxbank.transactions, fluxbank.transfers, fluxbank.account_balances,
                 fluxbank.beneficiaries, fluxbank.accounts, fluxbank.users RESTART IDENTITY
                 """);
     }

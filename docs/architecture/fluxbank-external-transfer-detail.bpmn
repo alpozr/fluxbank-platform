@@ -1,0 +1,301 @@
+<?xml version='1.0' encoding='utf-8'?>
+<bpmn:definitions xmlns:bioc="http://bpmn.io/schema/bpmn/biocolor/1.0" xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" id="Definitions_fluxbank-external-transfer-detail" targetNamespace="https://fluxbank.local/architecture" exporter="FluxBank architecture documentation" exporterVersion="2">
+  <bpmn:process id="fluxbank-external-transfer-detail_app" name="FluxBank | external transfer" isExecutable="false">
+    <bpmn:laneSet id="fluxbank-external-transfer-detail_app_lanes">
+      <bpmn:lane id="fluxbank-external-transfer-detail_app_reserve" name="Reserve">
+        <bpmn:flowNodeRef>fluxbank-external-transfer-detail_subProcess1</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="fluxbank-external-transfer-detail_app_provider" name="Provider call">
+        <bpmn:flowNodeRef>fluxbank-external-transfer-detail_serviceTask7</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-external-transfer-detail_serviceTask8</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-external-transfer-detail_exclusiveGateway9</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="fluxbank-external-transfer-detail_app_final" name="Finalize">
+        <bpmn:flowNodeRef>fluxbank-external-transfer-detail_subProcess13</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-external-transfer-detail_subProcess17</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-external-transfer-detail_serviceTask23</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="fluxbank-external-transfer-detail_app_return" name="Result">
+        <bpmn:flowNodeRef>fluxbank-external-transfer-detail_serviceTask25</bpmn:flowNodeRef>
+      </bpmn:lane>
+    </bpmn:laneSet>
+    <bpmn:subProcess id="fluxbank-external-transfer-detail_subProcess1" name="TX-RESERVATION | createPendingAndReserve()">
+      <bpmn:documentation>Spring proxy starts this database transaction on entry. Successful return/flush commits all enclosed writes. RuntimeException or commit failure rolls back the enclosed writes. JPA SQL may be issued at flush; the diagram shows Java execution order. REQUIRED joins a caller transaction; the normal HTTP orchestration has no outer transaction.
+Sources: ExternalTransferReservationService.createPendingAndReserve() — src/main/java/com/fluxbank/transfer/application/ExternalTransferReservationService.java:36</bpmn:documentation>
+      <bpmn:outgoing>fluxbank-external-transfer-detail_Flow10</bpmn:outgoing>
+      <bpmn:serviceTask id="fluxbank-external-transfer-detail_serviceTask2" name="01 | Lock + validate source&#10;AccountBalanceRepository&#10;.findByAccountPublicIdForUpdate()">
+        <bpmn:documentation>Sources: AccountBalanceRepository.findByAccountPublicIdForUpdate() — src/main/java/com/fluxbank/account/repository/AccountBalanceRepository.java:39; Account.validateAvailableForDebit() — src/main/java/com/fluxbank/account/domain/Account.java:204</bpmn:documentation>
+        <bpmn:outgoing>fluxbank-external-transfer-detail_Flow5</bpmn:outgoing>
+      </bpmn:serviceTask>
+      <bpmn:serviceTask id="fluxbank-external-transfer-detail_serviceTask3" name="02 | Reserve 100 EUR&#10;AccountBalance.reserve(100)&#10;Current 1000 / reserved 100">
+        <bpmn:documentation>Available 1000→900; current unchanged. Insufficient available throws; no provider call on rollback.
+Sources: AccountBalance.reserve() — src/main/java/com/fluxbank/account/domain/AccountBalance.java:113</bpmn:documentation>
+        <bpmn:incoming>fluxbank-external-transfer-detail_Flow5</bpmn:incoming>
+        <bpmn:outgoing>fluxbank-external-transfer-detail_Flow6</bpmn:outgoing>
+      </bpmn:serviceTask>
+      <bpmn:serviceTask id="fluxbank-external-transfer-detail_serviceTask4" name="03 | INSERT PENDING + COMMIT&#10;Transfer.create() → save()&#10;EXTERNAL; destination = null">
+        <bpmn:documentation>Generate TRX reference; save TransferRepository.save(). Reservation and INSERT commit atomically. Return ReservedExternalTransfer.
+Sources: TransferReferenceGenerator.nextReference() — src/main/java/com/fluxbank/transfer/application/TransferReferenceGenerator.java:18; Transfer.create() — src/main/java/com/fluxbank/transfer/domain/Transfer.java:157; ExternalTransferReservationService.createPendingAndReserve() — src/main/java/com/fluxbank/transfer/application/ExternalTransferReservationService.java:36</bpmn:documentation>
+        <bpmn:incoming>fluxbank-external-transfer-detail_Flow6</bpmn:incoming>
+      </bpmn:serviceTask>
+      <bpmn:sequenceFlow id="fluxbank-external-transfer-detail_Flow5" sourceRef="fluxbank-external-transfer-detail_serviceTask2" targetRef="fluxbank-external-transfer-detail_serviceTask3" />
+      <bpmn:sequenceFlow id="fluxbank-external-transfer-detail_Flow6" sourceRef="fluxbank-external-transfer-detail_serviceTask3" targetRef="fluxbank-external-transfer-detail_serviceTask4" />
+    </bpmn:subProcess>
+    <bpmn:serviceTask id="fluxbank-external-transfer-detail_serviceTask7" name="04 | Send payment after commit&#10;ExternalTransferProcessor.process()&#10;MockBankPaymentProviderClient&#10;.sendPayment()">
+      <bpmn:documentation>PaymentProviderRequest → BankTransferRequest. HTTP POST /idempotent-transfers outside any financial DB transaction. idempotency_key=reference; from/to are configured provider accounts, not beneficiary IBAN.
+Sources: ExternalTransferProcessor.process() — src/main/java/com/fluxbank/transfer/application/provider/ExternalTransferProcessor.java:20; MockBankPaymentProviderClient.sendPayment() — src/main/java/com/fluxbank/transfer/infrastructure/MockBankPaymentProviderClient.java:36</bpmn:documentation>
+      <bpmn:incoming>fluxbank-external-transfer-detail_Flow10</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-external-transfer-detail_Flow11</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="fluxbank-external-transfer-detail_serviceTask8" name="05 | Classify provider response&#10;PaymentProviderResult.status()&#10;SUCCESS / REJECTED / UNKNOWN">
+      <bpmn:documentation>SUCCESS: non-null response with top-level status completed. HTTP 4xx→REJECTED. 5xx/network/timeout/decoding/null/non-completed body→UNKNOWN. No configured explicit timeout or retry.
+Sources: MockBankPaymentProviderClient.sendPayment() — src/main/java/com/fluxbank/transfer/infrastructure/MockBankPaymentProviderClient.java:36</bpmn:documentation>
+      <bpmn:incoming>fluxbank-external-transfer-detail_Flow11</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-external-transfer-detail_Flow12</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:exclusiveGateway id="fluxbank-external-transfer-detail_exclusiveGateway9" name="Provider outcome?">
+      <bpmn:incoming>fluxbank-external-transfer-detail_Flow12</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-external-transfer-detail_Flow21</bpmn:outgoing>
+      <bpmn:outgoing>fluxbank-external-transfer-detail_Flow22</bpmn:outgoing>
+      <bpmn:outgoing>fluxbank-external-transfer-detail_Flow24</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="fluxbank-external-transfer-detail_Flow10" sourceRef="fluxbank-external-transfer-detail_subProcess1" targetRef="fluxbank-external-transfer-detail_serviceTask7" />
+    <bpmn:sequenceFlow id="fluxbank-external-transfer-detail_Flow11" sourceRef="fluxbank-external-transfer-detail_serviceTask7" targetRef="fluxbank-external-transfer-detail_serviceTask8" name="Map provider result" />
+    <bpmn:sequenceFlow id="fluxbank-external-transfer-detail_Flow12" sourceRef="fluxbank-external-transfer-detail_serviceTask8" targetRef="fluxbank-external-transfer-detail_exclusiveGateway9" />
+    <bpmn:subProcess id="fluxbank-external-transfer-detail_subProcess13" name="TX-FINANCIAL | complete()">
+      <bpmn:documentation>Spring proxy starts this database transaction on entry. Successful return/flush commits all enclosed writes. RuntimeException or commit failure rolls back the enclosed writes. JPA SQL may be issued at flush; the diagram shows Java execution order. REQUIRED joins a caller transaction; the normal HTTP orchestration has no outer transaction.
+Sources: ExternalTransferFinalizationService.complete() — src/main/java/com/fluxbank/transfer/application/ExternalTransferFinalizationService.java:35</bpmn:documentation>
+      <bpmn:incoming>fluxbank-external-transfer-detail_Flow21</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-external-transfer-detail_Flow26</bpmn:outgoing>
+      <bpmn:serviceTask id="fluxbank-external-transfer-detail_serviceTask14" name="06a | Lock Transfer + balance&#10;Validate EXTERNAL / PENDING">
+        <bpmn:documentation>Lock Transfer first, then source balance. Terminal status rejects repeated settlement.
+Sources: TransferRepository.findByPublicIdForUpdate() — src/main/java/com/fluxbank/transfer/repository/TransferRepository.java:26; ExternalTransferFinalizationService.validateExternalPending() — src/main/java/com/fluxbank/transfer/application/ExternalTransferFinalizationService.java:73; AccountBalanceRepository.findByAccountPublicIdForUpdate() — src/main/java/com/fluxbank/account/repository/AccountBalanceRepository.java:39</bpmn:documentation>
+        <bpmn:outgoing>fluxbank-external-transfer-detail_Flow16</bpmn:outgoing>
+      </bpmn:serviceTask>
+      <bpmn:serviceTask id="fluxbank-external-transfer-detail_serviceTask15" name="07a | Settle + complete + Outbox&#10;AccountBalance.settle(100)&#10;Current 900 / reserved 0">
+        <bpmn:documentation>Available stays 900. UPDATE balance + Transfer COMPLETED + INSERT Outbox commit together. Provider payment cannot be rolled back by this local TX.
+Sources: AccountBalance.settle() — src/main/java/com/fluxbank/account/domain/AccountBalance.java:137; Transfer.complete() — src/main/java/com/fluxbank/transfer/domain/Transfer.java:207; OutboxTransferEventPublisher.publishCompleted() — src/main/java/com/fluxbank/transfer/infrastructure/OutboxTransferEventPublisher.java:32</bpmn:documentation>
+        <bpmn:incoming>fluxbank-external-transfer-detail_Flow16</bpmn:incoming>
+      </bpmn:serviceTask>
+      <bpmn:sequenceFlow id="fluxbank-external-transfer-detail_Flow16" sourceRef="fluxbank-external-transfer-detail_serviceTask14" targetRef="fluxbank-external-transfer-detail_serviceTask15" />
+    </bpmn:subProcess>
+    <bpmn:subProcess id="fluxbank-external-transfer-detail_subProcess17" name="TX-REJECTION | fail()">
+      <bpmn:documentation>Spring proxy starts this database transaction on entry. Successful return/flush commits all enclosed writes. RuntimeException or commit failure rolls back the enclosed writes. JPA SQL may be issued at flush; the diagram shows Java execution order. REQUIRED joins a caller transaction; the normal HTTP orchestration has no outer transaction.
+Sources: ExternalTransferFinalizationService.fail() — src/main/java/com/fluxbank/transfer/application/ExternalTransferFinalizationService.java:57</bpmn:documentation>
+      <bpmn:incoming>fluxbank-external-transfer-detail_Flow22</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-external-transfer-detail_Flow27</bpmn:outgoing>
+      <bpmn:serviceTask id="fluxbank-external-transfer-detail_serviceTask18" name="06b | Lock Transfer + balance&#10;Validate EXTERNAL / PENDING">
+        <bpmn:documentation>Sources: TransferRepository.findByPublicIdForUpdate() — src/main/java/com/fluxbank/transfer/repository/TransferRepository.java:26; ExternalTransferFinalizationService.validateExternalPending() — src/main/java/com/fluxbank/transfer/application/ExternalTransferFinalizationService.java:73; AccountBalanceRepository.findByAccountPublicIdForUpdate() — src/main/java/com/fluxbank/account/repository/AccountBalanceRepository.java:39</bpmn:documentation>
+        <bpmn:outgoing>fluxbank-external-transfer-detail_Flow20</bpmn:outgoing>
+      </bpmn:serviceTask>
+      <bpmn:serviceTask id="fluxbank-external-transfer-detail_serviceTask19" name="07b | Release + mark FAILED&#10;AccountBalance.release(100)&#10;Current 1000 / reserved 0">
+        <bpmn:documentation>Available 900→1000. Transfer.fail(EXTERNAL_PROVIDER_REJECTED). Both UPDATEs commit together. No completion Outbox and no History.
+Sources: AccountBalance.release() — src/main/java/com/fluxbank/account/domain/AccountBalance.java:125; Transfer.fail() — src/main/java/com/fluxbank/transfer/domain/Transfer.java:219</bpmn:documentation>
+        <bpmn:incoming>fluxbank-external-transfer-detail_Flow20</bpmn:incoming>
+      </bpmn:serviceTask>
+      <bpmn:sequenceFlow id="fluxbank-external-transfer-detail_Flow20" sourceRef="fluxbank-external-transfer-detail_serviceTask18" targetRef="fluxbank-external-transfer-detail_serviceTask19" />
+    </bpmn:subProcess>
+    <bpmn:sequenceFlow id="fluxbank-external-transfer-detail_Flow21" sourceRef="fluxbank-external-transfer-detail_exclusiveGateway9" targetRef="fluxbank-external-transfer-detail_subProcess13" name="SUCCESS" />
+    <bpmn:sequenceFlow id="fluxbank-external-transfer-detail_Flow22" sourceRef="fluxbank-external-transfer-detail_exclusiveGateway9" targetRef="fluxbank-external-transfer-detail_subProcess17" name="REJECTED" />
+    <bpmn:serviceTask id="fluxbank-external-transfer-detail_serviceTask23" name="UNKNOWN: keep reservation&#10;PENDING; current 1000 / reserved 100&#10;No reconciliation implemented">
+      <bpmn:documentation>Available remains 900; no Outbox or History. Provider-success/local-commit-failure is also unresolved. Outbox recovery is unrelated.
+Sources: ExternalTransferProcessor.process() — src/main/java/com/fluxbank/transfer/application/provider/ExternalTransferProcessor.java:20</bpmn:documentation>
+      <bpmn:incoming>fluxbank-external-transfer-detail_Flow24</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-external-transfer-detail_Flow28</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="fluxbank-external-transfer-detail_Flow24" sourceRef="fluxbank-external-transfer-detail_exclusiveGateway9" targetRef="fluxbank-external-transfer-detail_serviceTask23" name="UNKNOWN / timeout" />
+    <bpmn:serviceTask id="fluxbank-external-transfer-detail_serviceTask25" name="08 | Return current state&#10;TransferLifecycleService.getResponse()&#10;HTTP 201: COMPLETED / FAILED / PENDING">
+      <bpmn:documentation>Finalization rollback retains earlier reservation and PENDING; exception propagates instead of this normal response. Completed events continue through Outbox to source-only DEBIT History.
+Sources: TransferLifecycleService.getResponse() — src/main/java/com/fluxbank/transfer/application/TransferLifecycleService.java:79</bpmn:documentation>
+      <bpmn:incoming>fluxbank-external-transfer-detail_Flow26</bpmn:incoming>
+      <bpmn:incoming>fluxbank-external-transfer-detail_Flow27</bpmn:incoming>
+      <bpmn:incoming>fluxbank-external-transfer-detail_Flow28</bpmn:incoming>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="fluxbank-external-transfer-detail_Flow26" sourceRef="fluxbank-external-transfer-detail_subProcess13" targetRef="fluxbank-external-transfer-detail_serviceTask25" />
+    <bpmn:sequenceFlow id="fluxbank-external-transfer-detail_Flow27" sourceRef="fluxbank-external-transfer-detail_subProcess17" targetRef="fluxbank-external-transfer-detail_serviceTask25" />
+    <bpmn:sequenceFlow id="fluxbank-external-transfer-detail_Flow28" sourceRef="fluxbank-external-transfer-detail_serviceTask23" targetRef="fluxbank-external-transfer-detail_serviceTask25" />
+  </bpmn:process>
+  <bpmn:process id="fluxbank-external-transfer-detail_bank" name="MockBank | separate system and database" isExecutable="false">
+    <bpmn:receiveTask id="fluxbank-external-transfer-detail_receiveTask29" name="POST /idempotent-transfers&#10;Reference-based idempotency&#10;Configured settlement → recipient">
+      <bpmn:documentation>docker/mockbank/src/routes/transfer_routes.py:create_idempotent_transfer_endpoint(). First success response is flat; duplicate response may nest transaction and be UNKNOWN to the FluxBank adapter. Provider reference is not persisted.</bpmn:documentation>
+    </bpmn:receiveTask>
+  </bpmn:process>
+  <bpmn:collaboration id="Collaboration_fluxbank-external-transfer-detail">
+    <bpmn:documentation>04 | EXTERNAL: A → external bank, 100 EUR
+Source: current working tree, 2026-11-08. Documentation only; isExecutable=false. Solid arrows = local execution order. Dashed arrows = HTTP/Kafka messages across pools. Green expanded subprocess = Spring database transaction, not BPMN compensation semantics. Red = failure; amber = retry/recovery. DB visibility is by commit and SELECT, not an in-memory message. Open README.md for the source index and linked pages.</bpmn:documentation>
+    <bpmn:participant id="fluxbank-external-transfer-detail_app_pool" name="FluxBank | external transfer" processRef="fluxbank-external-transfer-detail_app" />
+    <bpmn:participant id="fluxbank-external-transfer-detail_bank_pool" name="MockBank | separate system and database" processRef="fluxbank-external-transfer-detail_bank" />
+    <bpmn:messageFlow id="fluxbank-external-transfer-detail_Message30" sourceRef="fluxbank-external-transfer-detail_serviceTask7" targetRef="fluxbank-external-transfer-detail_receiveTask29" name="HTTP request (no DB TX)" />
+    <bpmn:messageFlow id="fluxbank-external-transfer-detail_Message31" sourceRef="fluxbank-external-transfer-detail_receiveTask29" targetRef="fluxbank-external-transfer-detail_serviceTask8" name="HTTP response" />
+  </bpmn:collaboration>
+  <bpmndi:BPMNDiagram id="Diagram_fluxbank-external-transfer-detail" name="04 | EXTERNAL: A → external bank, 100 EUR">
+    <bpmndi:BPMNPlane id="Plane_fluxbank-external-transfer-detail" bpmnElement="Collaboration_fluxbank-external-transfer-detail">
+      <bpmndi:BPMNShape id="fluxbank-external-transfer-detail_app_pool_di" bpmnElement="fluxbank-external-transfer-detail_app_pool" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="20" y="20" width="1120" height="1590" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-external-transfer-detail_app_reserve_di" bpmnElement="fluxbank-external-transfer-detail_app_reserve" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="50" y="20" width="1090" height="350" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-external-transfer-detail_app_provider_di" bpmnElement="fluxbank-external-transfer-detail_app_provider" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="50" y="370" width="1090" height="305" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-external-transfer-detail_app_final_di" bpmnElement="fluxbank-external-transfer-detail_app_final" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="50" y="675" width="1090" height="650" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-external-transfer-detail_app_return_di" bpmnElement="fluxbank-external-transfer-detail_app_return" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="50" y="1325" width="1090" height="285" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-external-transfer-detail_subProcess1_di" bpmnElement="fluxbank-external-transfer-detail_subProcess1" bioc:fill="#f0fdf4" bioc:stroke="#15803d" isExpanded="true">
+        <dc:Bounds x="120" y="70" width="920" height="235" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-external-transfer-detail_serviceTask2_di" bpmnElement="fluxbank-external-transfer-detail_serviceTask2" bioc:fill="#f0fdf4" bioc:stroke="#15803d">
+        <dc:Bounds x="150" y="145" width="250" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-external-transfer-detail_serviceTask3_di" bpmnElement="fluxbank-external-transfer-detail_serviceTask3" bioc:fill="#f0fdf4" bioc:stroke="#15803d">
+        <dc:Bounds x="450" y="145" width="250" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-external-transfer-detail_serviceTask4_di" bpmnElement="fluxbank-external-transfer-detail_serviceTask4" bioc:fill="#f0fdf4" bioc:stroke="#15803d">
+        <dc:Bounds x="750" y="145" width="260" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-external-transfer-detail_Flow5_di" bpmnElement="fluxbank-external-transfer-detail_Flow5">
+        <di:waypoint x="400" y="193.0" />
+        <di:waypoint x="450" y="193.0" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-external-transfer-detail_Flow6_di" bpmnElement="fluxbank-external-transfer-detail_Flow6">
+        <di:waypoint x="700" y="193.0" />
+        <di:waypoint x="750" y="193.0" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-external-transfer-detail_serviceTask7_di" bpmnElement="fluxbank-external-transfer-detail_serviceTask7" bioc:fill="#eff6ff" bioc:stroke="#1d4ed8">
+        <dc:Bounds x="150" y="425" width="300" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-external-transfer-detail_serviceTask8_di" bpmnElement="fluxbank-external-transfer-detail_serviceTask8" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="750" y="425" width="260" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-external-transfer-detail_exclusiveGateway9_di" bpmnElement="fluxbank-external-transfer-detail_exclusiveGateway9" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="555" y="590" width="46" height="46" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="609" y="643" width="150" height="40" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-external-transfer-detail_Flow10_di" bpmnElement="fluxbank-external-transfer-detail_Flow10">
+        <di:waypoint x="580" y="305" />
+        <di:waypoint x="580" y="340" />
+        <di:waypoint x="300" y="340" />
+        <di:waypoint x="300" y="425" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-external-transfer-detail_Flow11_di" bpmnElement="fluxbank-external-transfer-detail_Flow11">
+        <di:waypoint x="450" y="473" />
+        <di:waypoint x="750" y="473" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="510" y="440" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-external-transfer-detail_Flow12_di" bpmnElement="fluxbank-external-transfer-detail_Flow12">
+        <di:waypoint x="880" y="521" />
+        <di:waypoint x="880" y="560" />
+        <di:waypoint x="578" y="560" />
+        <di:waypoint x="578" y="590" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-external-transfer-detail_subProcess13_di" bpmnElement="fluxbank-external-transfer-detail_subProcess13" bioc:fill="#f0fdf4" bioc:stroke="#15803d" isExpanded="true">
+        <dc:Bounds x="120" y="740" width="440" height="420" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-external-transfer-detail_serviceTask14_di" bpmnElement="fluxbank-external-transfer-detail_serviceTask14" bioc:fill="#f0fdf4" bioc:stroke="#15803d">
+        <dc:Bounds x="150" y="810" width="380" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-external-transfer-detail_serviceTask15_di" bpmnElement="fluxbank-external-transfer-detail_serviceTask15" bioc:fill="#f0fdf4" bioc:stroke="#15803d">
+        <dc:Bounds x="150" y="985" width="380" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-external-transfer-detail_Flow16_di" bpmnElement="fluxbank-external-transfer-detail_Flow16">
+        <di:waypoint x="340.0" y="906" />
+        <di:waypoint x="340.0" y="985" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-external-transfer-detail_subProcess17_di" bpmnElement="fluxbank-external-transfer-detail_subProcess17" bioc:fill="#f0fdf4" bioc:stroke="#15803d" isExpanded="true">
+        <dc:Bounds x="600" y="740" width="440" height="420" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-external-transfer-detail_serviceTask18_di" bpmnElement="fluxbank-external-transfer-detail_serviceTask18" bioc:fill="#f0fdf4" bioc:stroke="#15803d">
+        <dc:Bounds x="630" y="810" width="380" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-external-transfer-detail_serviceTask19_di" bpmnElement="fluxbank-external-transfer-detail_serviceTask19" bioc:fill="#f0fdf4" bioc:stroke="#15803d">
+        <dc:Bounds x="630" y="985" width="380" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-external-transfer-detail_Flow20_di" bpmnElement="fluxbank-external-transfer-detail_Flow20">
+        <di:waypoint x="820.0" y="906" />
+        <di:waypoint x="820.0" y="985" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-external-transfer-detail_Flow21_di" bpmnElement="fluxbank-external-transfer-detail_Flow21" bioc:stroke="#15803d">
+        <di:waypoint x="555" y="613" />
+        <di:waypoint x="340" y="613" />
+        <di:waypoint x="340" y="740" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="300" y="685" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-external-transfer-detail_Flow22_di" bpmnElement="fluxbank-external-transfer-detail_Flow22" bioc:stroke="#be123c">
+        <di:waypoint x="601" y="613" />
+        <di:waypoint x="820" y="613" />
+        <di:waypoint x="820" y="740" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="800" y="685" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-external-transfer-detail_serviceTask23_di" bpmnElement="fluxbank-external-transfer-detail_serviceTask23" bioc:fill="#fffbeb" bioc:stroke="#a16207">
+        <dc:Bounds x="150" y="1200" width="380" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-external-transfer-detail_Flow24_di" bpmnElement="fluxbank-external-transfer-detail_Flow24" bioc:stroke="#a16207">
+        <di:waypoint x="578" y="636" />
+        <di:waypoint x="578" y="1248" />
+        <di:waypoint x="530" y="1248" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="580" y="1170" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-external-transfer-detail_serviceTask25_di" bpmnElement="fluxbank-external-transfer-detail_serviceTask25" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="430" y="1420" width="320" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-external-transfer-detail_Flow26_di" bpmnElement="fluxbank-external-transfer-detail_Flow26">
+        <di:waypoint x="340" y="1160" />
+        <di:waypoint x="105" y="1160" />
+        <di:waypoint x="105" y="1380" />
+        <di:waypoint x="590" y="1380" />
+        <di:waypoint x="590" y="1420" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-external-transfer-detail_Flow27_di" bpmnElement="fluxbank-external-transfer-detail_Flow27">
+        <di:waypoint x="820" y="1160" />
+        <di:waypoint x="1070" y="1160" />
+        <di:waypoint x="1070" y="1380" />
+        <di:waypoint x="590" y="1380" />
+        <di:waypoint x="590" y="1420" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-external-transfer-detail_Flow28_di" bpmnElement="fluxbank-external-transfer-detail_Flow28">
+        <di:waypoint x="340" y="1296" />
+        <di:waypoint x="340" y="1400" />
+        <di:waypoint x="430" y="1400" />
+        <di:waypoint x="430" y="1468" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-external-transfer-detail_bank_pool_di" bpmnElement="fluxbank-external-transfer-detail_bank_pool" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="20" y="1650" width="1120" height="180" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-external-transfer-detail_receiveTask29_di" bpmnElement="fluxbank-external-transfer-detail_receiveTask29" bioc:fill="#eff6ff" bioc:stroke="#1d4ed8">
+        <dc:Bounds x="750" y="1695" width="260" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-external-transfer-detail_Message30_di" bpmnElement="fluxbank-external-transfer-detail_Message30">
+        <di:waypoint x="150" y="473" />
+        <di:waypoint x="75" y="473" />
+        <di:waypoint x="75" y="1743" />
+        <di:waypoint x="750" y="1743" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="90" y="1640" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-external-transfer-detail_Message31_di" bpmnElement="fluxbank-external-transfer-detail_Message31">
+        <di:waypoint x="1010" y="1743" />
+        <di:waypoint x="1100" y="1743" />
+        <di:waypoint x="1100" y="473" />
+        <di:waypoint x="1010" y="473" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="930" y="1630" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

@@ -1,6 +1,12 @@
 package com.fluxbank.integration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fluxbank.account.domain.CurrencyCode;
+import com.fluxbank.transfer.domain.TransferType;
+import com.fluxbank.transfer.application.TransferCompletedEvent;
+import com.fluxbank.transfer.infrastructure.kafka.TransferCompletedKafkaEvent;
+import java.math.BigDecimal;
 import com.fluxbank.outbox.domain.OutboxEvent;
 import com.fluxbank.outbox.domain.OutboxStatus;
 import com.fluxbank.outbox.repository.OutboxEventRepository;
@@ -52,11 +58,6 @@ class KafkaPublisherIntegrationTest extends PostgresIntegrationTest {
         try (AdminClient admin = AdminClient.create(Map.of(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers()))) {
             admin.createTopics(List.of(new NewTopic(topic, 1, (short) 1))).all().get(20, TimeUnit.SECONDS);
         }
-        UUID transferId = UUID.randomUUID();
-        OutboxEvent original = events.saveAndFlush(OutboxEvent.create("TRANSFER_COMPLETED", transferId,
-                objectMapper.createObjectNode().put("transferPublicId", transferId.toString())));
-        // Reload the persisted timestamp, including PostgreSQL's timestamp precision.
-        OutboxEvent stored = events.findByPublicId(original.getPublicId()).orElseThrow();
         try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(Map.of(
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers(),
                 ConsumerConfig.GROUP_ID_CONFIG, "publisher-test-" + UUID.randomUUID(),
@@ -67,21 +68,44 @@ class KafkaPublisherIntegrationTest extends PostgresIntegrationTest {
             consumer.assign(List.of(partition));
             consumer.seekToBeginning(List.of(partition));
 
-            publisher.publish(stored); // Real KafkaTemplate, serializer, broker, and acknowledgement.
+            // Verify both enriched movement types and an existing ID-only outbox row.
+            for (TransferType type : new TransferType[]{null, TransferType.INTERNAL, TransferType.EXTERNAL}) {
+                UUID transferId = UUID.randomUUID();
+                UUID sourceId = UUID.randomUUID();
+                UUID destinationId = type == TransferType.INTERNAL ? UUID.randomUUID() : null;
+                BigDecimal amount = new BigDecimal("987654321012345.6789");
+                JsonNode payload = type == null ? objectMapper.createObjectNode().put("transferPublicId", transferId.toString())
+                        : objectMapper.valueToTree(new TransferCompletedEvent(transferId, type, sourceId, destinationId, amount, CurrencyCode.EUR));
+                OutboxEvent original = events.saveAndFlush(OutboxEvent.create("TRANSFER_COMPLETED", transferId, payload));
+                // Reload JSONB and timestamp using actual PostgreSQL precision.
+                OutboxEvent stored = events.findByPublicId(original.getPublicId()).orElseThrow();
+                try {
+                    publisher.publish(stored);
 
-            ConsumerRecord<String, String> record = receive(consumer);
-            assertEquals(topic, record.topic());
-            assertEquals(transferId.toString(), record.key());
-            var json = objectMapper.readTree(record.value());
-            assertEquals(5, json.size());
-            assertEquals(original.getPublicId().toString(), json.get("eventId").asText());
-            assertEquals("TRANSFER_COMPLETED", json.get("eventType").asText());
-            assertEquals(transferId.toString(), json.get("aggregateId").asText());
-            assertEquals(transferId.toString(), json.get("transferPublicId").asText());
-            assertEquals(stored.getCreatedAt(), Instant.parse(json.get("occurredAt").asText()));
-            assertEquals(OutboxStatus.PENDING, events.findByPublicId(original.getPublicId()).orElseThrow().getStatus());
-        } finally {
-            events.deleteById(original.getId());
+                    ConsumerRecord<String, String> record = receive(consumer);
+                    assertEquals(topic, record.topic());
+                    assertEquals(transferId.toString(), record.key());
+                    var json = objectMapper.readTree(record.value());
+                    assertEquals(type == null ? 5 : type == TransferType.INTERNAL ? 10 : 9, json.size());
+                    assertEquals(original.getPublicId().toString(), json.get("eventId").asText());
+                    assertEquals("TRANSFER_COMPLETED", json.get("eventType").asText());
+                    assertEquals(transferId.toString(), json.get("aggregateId").asText());
+                    assertEquals(transferId.toString(), json.get("transferPublicId").asText());
+                    assertEquals(stored.getCreatedAt(), Instant.parse(json.get("occurredAt").asText()));
+                    if (type != null) {
+                        var received = objectMapper.readValue(record.value(), TransferCompletedKafkaEvent.class);
+                        assertEquals(type, received.transferType());
+                        assertEquals(sourceId, received.sourceAccountPublicId());
+                        assertEquals(destinationId, received.destinationAccountPublicId());
+                        assertEquals(amount, received.amount());
+                        assertEquals(CurrencyCode.EUR, received.currency());
+                        assertTrue(json.get("amount").isNumber());
+                    }
+                    assertEquals(OutboxStatus.PENDING, events.findByPublicId(original.getPublicId()).orElseThrow().getStatus());
+                } finally {
+                    events.deleteById(original.getId());
+                }
+            }
         }
     }
 

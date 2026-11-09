@@ -1,0 +1,193 @@
+<?xml version='1.0' encoding='utf-8'?>
+<bpmn:definitions xmlns:bioc="http://bpmn.io/schema/bpmn/biocolor/1.0" xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" id="Definitions_fluxbank-transfer-entry-detail" targetNamespace="https://fluxbank.local/architecture" exporter="FluxBank architecture documentation" exporterVersion="2">
+  <bpmn:process id="fluxbank-transfer-entry-detail_client" name="Client" isExecutable="false">
+    <bpmn:serviceTask id="fluxbank-transfer-entry-detail_serviceTask1" name="Submit transfer&#10;POST /api/v1/transfers&#10;Bearer JWT; amount = 100 EUR" />
+  </bpmn:process>
+  <bpmn:process id="fluxbank-transfer-entry-detail_app" name="FluxBank | entry and ownership checks" isExecutable="false">
+    <bpmn:laneSet id="fluxbank-transfer-entry-detail_app_lanes">
+      <bpmn:lane id="fluxbank-transfer-entry-detail_app_sec" name="Security">
+        <bpmn:flowNodeRef>fluxbank-transfer-entry-detail_serviceTask2</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-transfer-entry-detail_serviceTask3</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="fluxbank-transfer-entry-detail_app_valid" name="Validation">
+        <bpmn:flowNodeRef>fluxbank-transfer-entry-detail_serviceTask6</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-transfer-entry-detail_serviceTask7</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-transfer-entry-detail_serviceTask8</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="fluxbank-transfer-entry-detail_app_route" name="Routing">
+        <bpmn:flowNodeRef>fluxbank-transfer-entry-detail_serviceTask12</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-transfer-entry-detail_exclusiveGateway14</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-transfer-entry-detail_serviceTask16</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-transfer-entry-detail_serviceTask17</bpmn:flowNodeRef>
+      </bpmn:lane>
+    </bpmn:laneSet>
+    <bpmn:serviceTask id="fluxbank-transfer-entry-detail_serviceTask2" name="01 | Require authentication&#10;SecurityConfig.securityFilterChain()">
+      <bpmn:documentation>Stateless; CSRF disabled; login/register public, all other requests authenticated. No extra transfer role rule.
+Sources: SecurityConfig.securityFilterChain() — src/main/java/com/fluxbank/common/security/SecurityConfig.java:27</bpmn:documentation>
+      <bpmn:outgoing>fluxbank-transfer-entry-detail_Flow5</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="fluxbank-transfer-entry-detail_serviceTask3" name="02 | Verify JWT and user&#10;JwtAuthenticationFilter&#10;.doFilterInternal()">
+      <bpmn:documentation>Bearer token → JwtService.extractUsername() validates signature/expiration → CustomUserDetailsService.loadUserByUsername(). Disabled user or invalid JWT: 401.
+Sources: JwtAuthenticationFilter.doFilterInternal() — src/main/java/com/fluxbank/common/security/JwtAuthenticationFilter.java:30; JwtService.extractUsername() — src/main/java/com/fluxbank/common/security/JwtService.java:59; CustomUserDetailsService.loadUserByUsername() — src/main/java/com/fluxbank/common/security/CustomUserDetailsService.java:21</bpmn:documentation>
+      <bpmn:incoming>fluxbank-transfer-entry-detail_Flow5</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-transfer-entry-detail_Flow9</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="fluxbank-transfer-entry-detail_Flow5" sourceRef="fluxbank-transfer-entry-detail_serviceTask2" targetRef="fluxbank-transfer-entry-detail_serviceTask3" />
+    <bpmn:serviceTask id="fluxbank-transfer-entry-detail_serviceTask6" name="03 | Validate request&#10;TransferController.createTransfer()&#10;@Valid CreateTransferRequest">
+      <bpmn:documentation>UUIDs required; amount @NotNull @Positive @Digits(integer=17,fraction=2). Invalid DTO: 400. No currency/type field.
+Sources: TransferController.createTransfer() — src/main/java/com/fluxbank/transfer/api/TransferController.java:21; CreateTransferRequest — src/main/java/com/fluxbank/transfer/api/CreateTransferRequest.java:10</bpmn:documentation>
+      <bpmn:incoming>fluxbank-transfer-entry-detail_Flow9</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-transfer-entry-detail_Flow10</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="fluxbank-transfer-entry-detail_serviceTask7" name="04 | Resolve owner&#10;TransferService.createTransfer()&#10;UserRepository.findByEmail()">
+      <bpmn:documentation>Sources: TransferService.createTransfer() — src/main/java/com/fluxbank/transfer/application/TransferService.java:59; UserRepository.findByEmail() — src/main/java/com/fluxbank/customer/repository/UserRepository.java:16</bpmn:documentation>
+      <bpmn:incoming>fluxbank-transfer-entry-detail_Flow10</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-transfer-entry-detail_Flow11</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="fluxbank-transfer-entry-detail_serviceTask8" name="05 | Check account + beneficiary&#10;Owner-scoped repository lookups">
+      <bpmn:documentation>TransferService invokes AccountRepository.findByPublicIdAndUser(), then BeneficiaryRepository.findByPublicIdAndOwnerAndActiveTrue(). Missing/wrong owner/inactive beneficiary: 404. Recipient may belong to another user.
+Sources: AccountRepository.findByPublicIdAndUser() — src/main/java/com/fluxbank/account/repository/AccountRepository.java:46; BeneficiaryRepository.findByPublicIdAndOwnerAndActiveTrue() — src/main/java/com/fluxbank/beneficiary/repository/BeneficiaryRepository.java:23</bpmn:documentation>
+      <bpmn:incoming>fluxbank-transfer-entry-detail_Flow11</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-transfer-entry-detail_Flow13</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="fluxbank-transfer-entry-detail_Flow9" sourceRef="fluxbank-transfer-entry-detail_serviceTask3" targetRef="fluxbank-transfer-entry-detail_serviceTask6" />
+    <bpmn:sequenceFlow id="fluxbank-transfer-entry-detail_Flow10" sourceRef="fluxbank-transfer-entry-detail_serviceTask6" targetRef="fluxbank-transfer-entry-detail_serviceTask7" />
+    <bpmn:sequenceFlow id="fluxbank-transfer-entry-detail_Flow11" sourceRef="fluxbank-transfer-entry-detail_serviceTask7" targetRef="fluxbank-transfer-entry-detail_serviceTask8" />
+    <bpmn:serviceTask id="fluxbank-transfer-entry-detail_serviceTask12" name="06 | Resolve beneficiary IBAN&#10;AccountRepository.findByIban()">
+      <bpmn:documentation>Uses stored active beneficiary. No repeated IBAN checksum validation here. TransferService has no @Transactional.
+Sources: AccountRepository.findByIban() — src/main/java/com/fluxbank/account/repository/AccountRepository.java:51</bpmn:documentation>
+      <bpmn:incoming>fluxbank-transfer-entry-detail_Flow13</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-transfer-entry-detail_Flow15</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="fluxbank-transfer-entry-detail_Flow13" sourceRef="fluxbank-transfer-entry-detail_serviceTask8" targetRef="fluxbank-transfer-entry-detail_serviceTask12" />
+    <bpmn:exclusiveGateway id="fluxbank-transfer-entry-detail_exclusiveGateway14" name="Local account exists?">
+      <bpmn:incoming>fluxbank-transfer-entry-detail_Flow15</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-transfer-entry-detail_Flow18</bpmn:outgoing>
+      <bpmn:outgoing>fluxbank-transfer-entry-detail_Flow19</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="fluxbank-transfer-entry-detail_Flow15" sourceRef="fluxbank-transfer-entry-detail_serviceTask12" targetRef="fluxbank-transfer-entry-detail_exclusiveGateway14" />
+    <bpmn:serviceTask id="fluxbank-transfer-entry-detail_serviceTask16" name="INTERNAL | reject A = B&#10;TransferService&#10;.processInternalTransfer()">
+      <bpmn:documentation>SameAccountTransferException before PENDING creation. Then see fluxbank-internal-transfer-detail.bpmn.
+Sources: TransferService.processInternalTransfer() — src/main/java/com/fluxbank/transfer/application/TransferService.java:104</bpmn:documentation>
+      <bpmn:incoming>fluxbank-transfer-entry-detail_Flow18</bpmn:incoming>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="fluxbank-transfer-entry-detail_serviceTask17" name="EXTERNAL | reserve first&#10;TransferService&#10;.processExternalTransfer()">
+      <bpmn:documentation>See fluxbank-external-transfer-detail.bpmn. Repeating POST is not protected by request idempotency.
+Sources: TransferService.processExternalTransfer() — src/main/java/com/fluxbank/transfer/application/TransferService.java:169</bpmn:documentation>
+      <bpmn:incoming>fluxbank-transfer-entry-detail_Flow19</bpmn:incoming>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="fluxbank-transfer-entry-detail_Flow18" sourceRef="fluxbank-transfer-entry-detail_exclusiveGateway14" targetRef="fluxbank-transfer-entry-detail_serviceTask16" name="Yes" />
+    <bpmn:sequenceFlow id="fluxbank-transfer-entry-detail_Flow19" sourceRef="fluxbank-transfer-entry-detail_exclusiveGateway14" targetRef="fluxbank-transfer-entry-detail_serviceTask17" name="No" />
+  </bpmn:process>
+  <bpmn:collaboration id="Collaboration_fluxbank-transfer-entry-detail">
+    <bpmn:documentation>02 | HTTP security, validation and routing
+Source: current working tree, 2026-11-08. Documentation only; isExecutable=false. Solid arrows = local execution order. Dashed arrows = HTTP/Kafka messages across pools. Green expanded subprocess = Spring database transaction, not BPMN compensation semantics. Red = failure; amber = retry/recovery. DB visibility is by commit and SELECT, not an in-memory message. Open README.md for the source index and linked pages.</bpmn:documentation>
+    <bpmn:participant id="fluxbank-transfer-entry-detail_client_pool" name="Client" processRef="fluxbank-transfer-entry-detail_client" />
+    <bpmn:participant id="fluxbank-transfer-entry-detail_app_pool" name="FluxBank | entry and ownership checks" processRef="fluxbank-transfer-entry-detail_app" />
+    <bpmn:messageFlow id="fluxbank-transfer-entry-detail_Message4" sourceRef="fluxbank-transfer-entry-detail_serviceTask1" targetRef="fluxbank-transfer-entry-detail_serviceTask2" name="HTTP request" />
+  </bpmn:collaboration>
+  <bpmndi:BPMNDiagram id="Diagram_fluxbank-transfer-entry-detail" name="02 | HTTP security, validation and routing">
+    <bpmndi:BPMNPlane id="Plane_fluxbank-transfer-entry-detail" bpmnElement="Collaboration_fluxbank-transfer-entry-detail">
+      <bpmndi:BPMNShape id="fluxbank-transfer-entry-detail_client_pool_di" bpmnElement="fluxbank-transfer-entry-detail_client_pool" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="20" y="20" width="1120" height="155" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-transfer-entry-detail_serviceTask1_di" bpmnElement="fluxbank-transfer-entry-detail_serviceTask1" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="110" y="50" width="260" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-transfer-entry-detail_app_pool_di" bpmnElement="fluxbank-transfer-entry-detail_app_pool" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="20" y="210" width="1120" height="1110" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-transfer-entry-detail_app_sec_di" bpmnElement="fluxbank-transfer-entry-detail_app_sec" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="50" y="210" width="1090" height="230" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-transfer-entry-detail_app_valid_di" bpmnElement="fluxbank-transfer-entry-detail_app_valid" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="50" y="440" width="1090" height="360" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-transfer-entry-detail_app_route_di" bpmnElement="fluxbank-transfer-entry-detail_app_route" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="50" y="800" width="1090" height="520" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-transfer-entry-detail_serviceTask2_di" bpmnElement="fluxbank-transfer-entry-detail_serviceTask2" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="110" y="265" width="260" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-transfer-entry-detail_serviceTask3_di" bpmnElement="fluxbank-transfer-entry-detail_serviceTask3" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="750" y="265" width="260" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-transfer-entry-detail_Message4_di" bpmnElement="fluxbank-transfer-entry-detail_Message4">
+        <di:waypoint x="240.0" y="146" />
+        <di:waypoint x="240.0" y="265" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="120" y="185" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-transfer-entry-detail_Flow5_di" bpmnElement="fluxbank-transfer-entry-detail_Flow5">
+        <di:waypoint x="370" y="313.0" />
+        <di:waypoint x="750" y="313.0" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-transfer-entry-detail_serviceTask6_di" bpmnElement="fluxbank-transfer-entry-detail_serviceTask6" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="750" y="495" width="260" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-transfer-entry-detail_serviceTask7_di" bpmnElement="fluxbank-transfer-entry-detail_serviceTask7" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="430" y="655" width="260" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-transfer-entry-detail_serviceTask8_di" bpmnElement="fluxbank-transfer-entry-detail_serviceTask8" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="110" y="495" width="260" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-transfer-entry-detail_Flow9_di" bpmnElement="fluxbank-transfer-entry-detail_Flow9">
+        <di:waypoint x="880.0" y="361" />
+        <di:waypoint x="880.0" y="495" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-transfer-entry-detail_Flow10_di" bpmnElement="fluxbank-transfer-entry-detail_Flow10">
+        <di:waypoint x="880" y="591" />
+        <di:waypoint x="880" y="630" />
+        <di:waypoint x="560" y="630" />
+        <di:waypoint x="560" y="655" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-transfer-entry-detail_Flow11_di" bpmnElement="fluxbank-transfer-entry-detail_Flow11">
+        <di:waypoint x="430" y="703" />
+        <di:waypoint x="395" y="703" />
+        <di:waypoint x="395" y="543" />
+        <di:waypoint x="370" y="543" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-transfer-entry-detail_serviceTask12_di" bpmnElement="fluxbank-transfer-entry-detail_serviceTask12" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="110" y="855" width="260" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-transfer-entry-detail_Flow13_di" bpmnElement="fluxbank-transfer-entry-detail_Flow13">
+        <di:waypoint x="240.0" y="591" />
+        <di:waypoint x="240.0" y="855" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-transfer-entry-detail_exclusiveGateway14_di" bpmnElement="fluxbank-transfer-entry-detail_exclusiveGateway14" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="510" y="880" width="46" height="46" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="564" y="933" width="150" height="40" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-transfer-entry-detail_Flow15_di" bpmnElement="fluxbank-transfer-entry-detail_Flow15">
+        <di:waypoint x="370" y="903.0" />
+        <di:waypoint x="510" y="903.0" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-transfer-entry-detail_serviceTask16_di" bpmnElement="fluxbank-transfer-entry-detail_serviceTask16" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="110" y="1090" width="260" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-transfer-entry-detail_serviceTask17_di" bpmnElement="fluxbank-transfer-entry-detail_serviceTask17" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="750" y="1090" width="260" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-transfer-entry-detail_Flow18_di" bpmnElement="fluxbank-transfer-entry-detail_Flow18">
+        <di:waypoint x="533" y="926" />
+        <di:waypoint x="533" y="1020" />
+        <di:waypoint x="240" y="1020" />
+        <di:waypoint x="240" y="1090" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="275" y="1040" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-transfer-entry-detail_Flow19_di" bpmnElement="fluxbank-transfer-entry-detail_Flow19">
+        <di:waypoint x="556" y="903" />
+        <di:waypoint x="880" y="903" />
+        <di:waypoint x="880" y="1090" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="725" y="1015" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>
