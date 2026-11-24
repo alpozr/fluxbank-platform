@@ -1,0 +1,310 @@
+<?xml version='1.0' encoding='utf-8'?>
+<bpmn:definitions xmlns:bioc="http://bpmn.io/schema/bpmn/biocolor/1.0" xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" id="Definitions_fluxbank-internal-transfer-detail" targetNamespace="https://fluxbank.local/architecture" exporter="FluxBank architecture documentation" exporterVersion="2">
+  <bpmn:process id="fluxbank-internal-transfer-detail_app" name="FluxBank | internal transfer" isExecutable="false">
+    <bpmn:laneSet id="fluxbank-internal-transfer-detail_app_lanes">
+      <bpmn:lane id="fluxbank-internal-transfer-detail_app_pre" name="Entry">
+        <bpmn:flowNodeRef>fluxbank-internal-transfer-detail_startEvent1</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-internal-transfer-detail_subProcess2</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="fluxbank-internal-transfer-detail_app_fin" name="Finance">
+        <bpmn:flowNodeRef>fluxbank-internal-transfer-detail_subProcess9</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="fluxbank-internal-transfer-detail_app_result" name="Result / failure">
+        <bpmn:flowNodeRef>fluxbank-internal-transfer-detail_serviceTask24</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-internal-transfer-detail_serviceTask27</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-internal-transfer-detail_exclusiveGateway29</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-internal-transfer-detail_serviceTask31</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-internal-transfer-detail_serviceTask32</bpmn:flowNodeRef>
+      </bpmn:lane>
+    </bpmn:laneSet>
+    <bpmn:startEvent id="fluxbank-internal-transfer-detail_startEvent1" name="Entry checks passed">
+      <bpmn:outgoing>fluxbank-internal-transfer-detail_Flow8</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:subProcess id="fluxbank-internal-transfer-detail_subProcess2" name="TX-PENDING | TransferLifecycleService.createPending()">
+      <bpmn:documentation>Spring proxy starts this database transaction on entry. Successful return/flush commits all enclosed writes. RuntimeException or commit failure rolls back the enclosed writes. JPA SQL may be issued at flush; the diagram shows Java execution order. REQUIRED joins a caller transaction; the normal HTTP orchestration has no outer transaction.
+Sources: TransferLifecycleService.createPending() — src/main/java/com/fluxbank/transfer/application/TransferLifecycleService.java:32</bpmn:documentation>
+      <bpmn:incoming>fluxbank-internal-transfer-detail_Flow8</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-internal-transfer-detail_Flow23</bpmn:outgoing>
+      <bpmn:serviceTask id="fluxbank-internal-transfer-detail_serviceTask3" name="01 | Generate transfer reference&#10;TransferReferenceGenerator&#10;.nextReference()">
+        <bpmn:documentation>SELECT nextval('fluxbank.transfer_reference_seq'); TRX-yyyyMMdd-sequence. Sequence increments do not roll back.
+Sources: TransferReferenceGenerator.nextReference() — src/main/java/com/fluxbank/transfer/application/TransferReferenceGenerator.java:18</bpmn:documentation>
+        <bpmn:outgoing>fluxbank-internal-transfer-detail_Flow6</bpmn:outgoing>
+      </bpmn:serviceTask>
+      <bpmn:serviceTask id="fluxbank-internal-transfer-detail_serviceTask4" name="02 | INSERT fluxbank.transfers&#10;Transfer.create() → save()&#10;INTERNAL / PENDING / 100 EUR">
+        <bpmn:documentation>TransferRepository.save(). UUID + unique reference, source=A, destination=B, beneficiary snapshot. Completed/failure fields null.
+Sources: Transfer.create() — src/main/java/com/fluxbank/transfer/domain/Transfer.java:157; TransferLifecycleService.createPending() — src/main/java/com/fluxbank/transfer/application/TransferLifecycleService.java:32</bpmn:documentation>
+        <bpmn:incoming>fluxbank-internal-transfer-detail_Flow6</bpmn:incoming>
+        <bpmn:outgoing>fluxbank-internal-transfer-detail_Flow7</bpmn:outgoing>
+      </bpmn:serviceTask>
+      <bpmn:endEvent id="fluxbank-internal-transfer-detail_endEvent5" name="COMMIT">
+        <bpmn:incoming>fluxbank-internal-transfer-detail_Flow7</bpmn:incoming>
+      </bpmn:endEvent>
+      <bpmn:sequenceFlow id="fluxbank-internal-transfer-detail_Flow6" sourceRef="fluxbank-internal-transfer-detail_serviceTask3" targetRef="fluxbank-internal-transfer-detail_serviceTask4" />
+      <bpmn:sequenceFlow id="fluxbank-internal-transfer-detail_Flow7" sourceRef="fluxbank-internal-transfer-detail_serviceTask4" targetRef="fluxbank-internal-transfer-detail_endEvent5" />
+    </bpmn:subProcess>
+    <bpmn:sequenceFlow id="fluxbank-internal-transfer-detail_Flow8" sourceRef="fluxbank-internal-transfer-detail_startEvent1" targetRef="fluxbank-internal-transfer-detail_subProcess2" />
+    <bpmn:subProcess id="fluxbank-internal-transfer-detail_subProcess9" name="TX-FINANCIAL | InternalTransferProcessor.process()">
+      <bpmn:documentation>Spring proxy starts this database transaction on entry. Successful return/flush commits all enclosed writes. RuntimeException or commit failure rolls back the enclosed writes. JPA SQL may be issued at flush; the diagram shows Java execution order. REQUIRED joins a caller transaction; the normal HTTP orchestration has no outer transaction.
+Sources: InternalTransferProcessor.process() — src/main/java/com/fluxbank/transfer/application/InternalTransferProcessor.java:37</bpmn:documentation>
+      <bpmn:incoming>fluxbank-internal-transfer-detail_Flow23</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-internal-transfer-detail_Flow25</bpmn:outgoing>
+      <bpmn:serviceTask id="fluxbank-internal-transfer-detail_serviceTask10" name="03 | Lock pending Transfer&#10;TransferRepository&#10;.findByPublicIdForUpdate()">
+        <bpmn:documentation>PESSIMISTIC_WRITE; require PENDING and INTERNAL.
+Sources: TransferRepository.findByPublicIdForUpdate() — src/main/java/com/fluxbank/transfer/repository/TransferRepository.java:26</bpmn:documentation>
+        <bpmn:outgoing>fluxbank-internal-transfer-detail_Flow17</bpmn:outgoing>
+      </bpmn:serviceTask>
+      <bpmn:serviceTask id="fluxbank-internal-transfer-detail_serviceTask11" name="04 | Lock both balances&#10;AccountBalanceRepository&#10;Order by account.id ASC">
+        <bpmn:documentation>findAllByAccountPublicIdInForUpdate(List.of(A,B)); require exactly two rows, resolve by account public UUID. Deterministic lock order reduces deadlock risk.
+Sources: AccountBalanceRepository.findAllByAccountPublicIdInForUpdate() — src/main/java/com/fluxbank/account/repository/AccountBalanceRepository.java:29</bpmn:documentation>
+        <bpmn:incoming>fluxbank-internal-transfer-detail_Flow17</bpmn:incoming>
+        <bpmn:outgoing>fluxbank-internal-transfer-detail_Flow18</bpmn:outgoing>
+      </bpmn:serviceTask>
+      <bpmn:serviceTask id="fluxbank-internal-transfer-detail_serviceTask12" name="05 | Validate currency + state&#10;Account.validateAvailableForDebit()&#10;Account.validateAvailableForCredit()">
+        <bpmn:documentation>Same currency required; no FX. Outgoing rejects closed/dormant/blocked/expired. Incoming rejects closed/expired.
+Sources: Account.validateAvailableForDebit() — src/main/java/com/fluxbank/account/domain/Account.java:204; Account.validateAvailableForCredit() — src/main/java/com/fluxbank/account/domain/Account.java:212</bpmn:documentation>
+        <bpmn:incoming>fluxbank-internal-transfer-detail_Flow18</bpmn:incoming>
+        <bpmn:outgoing>fluxbank-internal-transfer-detail_Flow19</bpmn:outgoing>
+      </bpmn:serviceTask>
+      <bpmn:serviceTask id="fluxbank-internal-transfer-detail_serviceTask13" name="06 | Debit A: 1000 → 900 EUR&#10;AccountBalance.debit(100)&#10;UPDATE account_balances">
+        <bpmn:documentation>Require available &gt;= 100. current_balance -=100; reserved unchanged; updated_at auditing. Available=current-reserved.
+Sources: AccountBalance.debit() — src/main/java/com/fluxbank/account/domain/AccountBalance.java:89</bpmn:documentation>
+        <bpmn:incoming>fluxbank-internal-transfer-detail_Flow19</bpmn:incoming>
+        <bpmn:outgoing>fluxbank-internal-transfer-detail_Flow20</bpmn:outgoing>
+      </bpmn:serviceTask>
+      <bpmn:serviceTask id="fluxbank-internal-transfer-detail_serviceTask14" name="07 | Credit B: 500 → 600 EUR&#10;AccountBalance.credit(100)&#10;UPDATE account_balances">
+        <bpmn:documentation>current_balance +=100; reserved unchanged; updated_at auditing.
+Sources: AccountBalance.credit() — src/main/java/com/fluxbank/account/domain/AccountBalance.java:101</bpmn:documentation>
+        <bpmn:incoming>fluxbank-internal-transfer-detail_Flow20</bpmn:incoming>
+        <bpmn:outgoing>fluxbank-internal-transfer-detail_Flow21</bpmn:outgoing>
+      </bpmn:serviceTask>
+      <bpmn:serviceTask id="fluxbank-internal-transfer-detail_serviceTask15" name="08 | Complete + record Outbox&#10;Transfer.complete()&#10;publishCompleted() [MANDATORY]">
+        <bpmn:documentation>UPDATE fluxbank.transfers status=COMPLETED, completed_at=now, failure_reason=null; INSERT fluxbank.outbox_event PENDING with immutable snapshot. OutboxEventRepository.save() joins the financial TX.
+Sources: Transfer.complete() — src/main/java/com/fluxbank/transfer/domain/Transfer.java:207; OutboxTransferEventPublisher.publishCompleted() — src/main/java/com/fluxbank/transfer/infrastructure/OutboxTransferEventPublisher.java:32; OutboxEvent.create() — src/main/java/com/fluxbank/outbox/domain/OutboxEvent.java:61</bpmn:documentation>
+        <bpmn:incoming>fluxbank-internal-transfer-detail_Flow21</bpmn:incoming>
+        <bpmn:outgoing>fluxbank-internal-transfer-detail_Flow22</bpmn:outgoing>
+      </bpmn:serviceTask>
+      <bpmn:endEvent id="fluxbank-internal-transfer-detail_endEvent16" name="COMMIT all financial writes">
+        <bpmn:incoming>fluxbank-internal-transfer-detail_Flow22</bpmn:incoming>
+      </bpmn:endEvent>
+      <bpmn:sequenceFlow id="fluxbank-internal-transfer-detail_Flow17" sourceRef="fluxbank-internal-transfer-detail_serviceTask10" targetRef="fluxbank-internal-transfer-detail_serviceTask11" />
+      <bpmn:sequenceFlow id="fluxbank-internal-transfer-detail_Flow18" sourceRef="fluxbank-internal-transfer-detail_serviceTask11" targetRef="fluxbank-internal-transfer-detail_serviceTask12" />
+      <bpmn:sequenceFlow id="fluxbank-internal-transfer-detail_Flow19" sourceRef="fluxbank-internal-transfer-detail_serviceTask12" targetRef="fluxbank-internal-transfer-detail_serviceTask13" />
+      <bpmn:sequenceFlow id="fluxbank-internal-transfer-detail_Flow20" sourceRef="fluxbank-internal-transfer-detail_serviceTask13" targetRef="fluxbank-internal-transfer-detail_serviceTask14" />
+      <bpmn:sequenceFlow id="fluxbank-internal-transfer-detail_Flow21" sourceRef="fluxbank-internal-transfer-detail_serviceTask14" targetRef="fluxbank-internal-transfer-detail_serviceTask15" />
+      <bpmn:sequenceFlow id="fluxbank-internal-transfer-detail_Flow22" sourceRef="fluxbank-internal-transfer-detail_serviceTask15" targetRef="fluxbank-internal-transfer-detail_endEvent16" />
+    </bpmn:subProcess>
+    <bpmn:sequenceFlow id="fluxbank-internal-transfer-detail_Flow23" sourceRef="fluxbank-internal-transfer-detail_subProcess2" targetRef="fluxbank-internal-transfer-detail_subProcess9" />
+    <bpmn:serviceTask id="fluxbank-internal-transfer-detail_serviceTask24" name="09 | Return COMPLETED&#10;TransferLifecycleService.getResponse()&#10;HTTP 201; History not awaited">
+      <bpmn:documentation>Separate readOnly transaction. Financial commit is complete; Outbox poller discovers committed event. Continue at fluxbank-kafka-outbox-history-detail.bpmn.
+Sources: TransferLifecycleService.getResponse() — src/main/java/com/fluxbank/transfer/application/TransferLifecycleService.java:79</bpmn:documentation>
+      <bpmn:incoming>fluxbank-internal-transfer-detail_Flow25</bpmn:incoming>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="fluxbank-internal-transfer-detail_Flow25" sourceRef="fluxbank-internal-transfer-detail_subProcess9" targetRef="fluxbank-internal-transfer-detail_serviceTask24" />
+    <bpmn:boundaryEvent id="fluxbank-internal-transfer-detail_boundaryEvent26" name="Rollback" attachedToRef="fluxbank-internal-transfer-detail_subProcess9" cancelActivity="true">
+      <bpmn:outgoing>fluxbank-internal-transfer-detail_Flow28</bpmn:outgoing>
+      <bpmn:errorEventDefinition id="fluxbank-internal-transfer-detail_boundaryEvent26_error" />
+    </bpmn:boundaryEvent>
+    <bpmn:serviceTask id="fluxbank-internal-transfer-detail_serviceTask27" name="Financial ROLLBACK&#10;Balances + completion + Outbox undone&#10;Earlier PENDING commit survives">
+      <bpmn:documentation>Runtime or commit failure rolls back TX-FINANCIAL only. TX-PENDING failure rolls back its INSERT; no financial processing starts.</bpmn:documentation>
+      <bpmn:incoming>fluxbank-internal-transfer-detail_Flow28</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-internal-transfer-detail_Flow30</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="fluxbank-internal-transfer-detail_Flow28" sourceRef="fluxbank-internal-transfer-detail_boundaryEvent26" targetRef="fluxbank-internal-transfer-detail_serviceTask27" />
+    <bpmn:exclusiveGateway id="fluxbank-internal-transfer-detail_exclusiveGateway29" name="Known business exception?">
+      <bpmn:incoming>fluxbank-internal-transfer-detail_Flow30</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-internal-transfer-detail_Flow33</bpmn:outgoing>
+      <bpmn:outgoing>fluxbank-internal-transfer-detail_Flow34</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="fluxbank-internal-transfer-detail_Flow30" sourceRef="fluxbank-internal-transfer-detail_serviceTask27" targetRef="fluxbank-internal-transfer-detail_exclusiveGateway29" />
+    <bpmn:serviceTask id="fluxbank-internal-transfer-detail_serviceTask31" name="Separate TX: mark FAILED&#10;TransferLifecycleService.markFailed()&#10;Rethrow business exception">
+      <bpmn:documentation>TransferService catches InsufficientFundsException, debit/credit availability and CurrencyMismatchException. Maps to INSUFFICIENT_FUNDS, SOURCE_ACCOUNT_UNAVAILABLE, DESTINATION_ACCOUNT_UNAVAILABLE, CURRENCY_MISMATCH. Uses findByPublicId(), no explicit row lock.
+Sources: TransferLifecycleService.markFailed() — src/main/java/com/fluxbank/transfer/application/TransferLifecycleService.java:65</bpmn:documentation>
+      <bpmn:incoming>fluxbank-internal-transfer-detail_Flow33</bpmn:incoming>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="fluxbank-internal-transfer-detail_serviceTask32" name="Technical failure: keep PENDING&#10;Exception propagates&#10;No pending-transfer recovery job">
+      <bpmn:documentation>Unexpected exceptions are not mapped to markFailed(). Failure of markFailed() has no automatic compensation.</bpmn:documentation>
+      <bpmn:incoming>fluxbank-internal-transfer-detail_Flow34</bpmn:incoming>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="fluxbank-internal-transfer-detail_Flow33" sourceRef="fluxbank-internal-transfer-detail_exclusiveGateway29" targetRef="fluxbank-internal-transfer-detail_serviceTask31" name="Yes: 4 mapped types" />
+    <bpmn:sequenceFlow id="fluxbank-internal-transfer-detail_Flow34" sourceRef="fluxbank-internal-transfer-detail_exclusiveGateway29" targetRef="fluxbank-internal-transfer-detail_serviceTask32" name="No: technical error" />
+  </bpmn:process>
+  <bpmn:collaboration id="Collaboration_fluxbank-internal-transfer-detail">
+    <bpmn:documentation>03 | INTERNAL: A → B, 100 EUR
+Source: current working tree, 2026-11-08. Documentation only; isExecutable=false. Solid arrows = local execution order. Dashed arrows = HTTP/Kafka messages across pools. Green expanded subprocess = Spring database transaction, not BPMN compensation semantics. Red = failure; amber = retry/recovery. DB visibility is by commit and SELECT, not an in-memory message. Open README.md for the source index and linked pages.</bpmn:documentation>
+    <bpmn:participant id="fluxbank-internal-transfer-detail_app_pool" name="FluxBank | internal transfer" processRef="fluxbank-internal-transfer-detail_app" />
+  </bpmn:collaboration>
+  <bpmndi:BPMNDiagram id="Diagram_fluxbank-internal-transfer-detail" name="03 | INTERNAL: A → B, 100 EUR">
+    <bpmndi:BPMNPlane id="Plane_fluxbank-internal-transfer-detail" bpmnElement="Collaboration_fluxbank-internal-transfer-detail">
+      <bpmndi:BPMNShape id="fluxbank-internal-transfer-detail_app_pool_di" bpmnElement="fluxbank-internal-transfer-detail_app_pool" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="20" y="20" width="1120" height="1630" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-internal-transfer-detail_app_pre_di" bpmnElement="fluxbank-internal-transfer-detail_app_pre" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="50" y="20" width="1090" height="365" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-internal-transfer-detail_app_fin_di" bpmnElement="fluxbank-internal-transfer-detail_app_fin" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="50" y="385" width="1090" height="705" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-internal-transfer-detail_app_result_di" bpmnElement="fluxbank-internal-transfer-detail_app_result" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="50" y="1090" width="1090" height="560" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-internal-transfer-detail_startEvent1_di" bpmnElement="fluxbank-internal-transfer-detail_startEvent1" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="110" y="75" width="32" height="32" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="40" y="114" width="172" height="40" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-internal-transfer-detail_subProcess2_di" bpmnElement="fluxbank-internal-transfer-detail_subProcess2" bioc:fill="#f0fdf4" bioc:stroke="#15803d" isExpanded="true">
+        <dc:Bounds x="200" y="65" width="840" height="250" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-internal-transfer-detail_serviceTask3_di" bpmnElement="fluxbank-internal-transfer-detail_serviceTask3" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="230" y="145" width="230" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-internal-transfer-detail_serviceTask4_di" bpmnElement="fluxbank-internal-transfer-detail_serviceTask4" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="540" y="145" width="270" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-internal-transfer-detail_endEvent5_di" bpmnElement="fluxbank-internal-transfer-detail_endEvent5" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="940" y="175" width="32" height="32" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="870" y="214" width="172" height="40" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-internal-transfer-detail_Flow6_di" bpmnElement="fluxbank-internal-transfer-detail_Flow6">
+        <di:waypoint x="460" y="193.0" />
+        <di:waypoint x="540" y="193.0" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-internal-transfer-detail_Flow7_di" bpmnElement="fluxbank-internal-transfer-detail_Flow7">
+        <di:waypoint x="810" y="193.0" />
+        <di:waypoint x="875.0" y="193.0" />
+        <di:waypoint x="875.0" y="191.0" />
+        <di:waypoint x="940" y="191.0" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-internal-transfer-detail_Flow8_di" bpmnElement="fluxbank-internal-transfer-detail_Flow8">
+        <di:waypoint x="142" y="91" />
+        <di:waypoint x="170" y="91" />
+        <di:waypoint x="170" y="190" />
+        <di:waypoint x="200" y="190" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-internal-transfer-detail_subProcess9_di" bpmnElement="fluxbank-internal-transfer-detail_subProcess9" bioc:fill="#f0fdf4" bioc:stroke="#15803d" isExpanded="true">
+        <dc:Bounds x="120" y="425" width="920" height="590" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-internal-transfer-detail_serviceTask10_di" bpmnElement="fluxbank-internal-transfer-detail_serviceTask10" bioc:fill="#f0fdf4" bioc:stroke="#15803d">
+        <dc:Bounds x="150" y="500" width="250" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-internal-transfer-detail_serviceTask11_di" bpmnElement="fluxbank-internal-transfer-detail_serviceTask11" bioc:fill="#f0fdf4" bioc:stroke="#15803d">
+        <dc:Bounds x="450" y="500" width="250" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-internal-transfer-detail_serviceTask12_di" bpmnElement="fluxbank-internal-transfer-detail_serviceTask12" bioc:fill="#f0fdf4" bioc:stroke="#15803d">
+        <dc:Bounds x="750" y="500" width="260" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-internal-transfer-detail_serviceTask13_di" bpmnElement="fluxbank-internal-transfer-detail_serviceTask13" bioc:fill="#f0fdf4" bioc:stroke="#15803d">
+        <dc:Bounds x="150" y="735" width="250" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-internal-transfer-detail_serviceTask14_di" bpmnElement="fluxbank-internal-transfer-detail_serviceTask14" bioc:fill="#f0fdf4" bioc:stroke="#15803d">
+        <dc:Bounds x="450" y="735" width="250" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-internal-transfer-detail_serviceTask15_di" bpmnElement="fluxbank-internal-transfer-detail_serviceTask15" bioc:fill="#f0fdf4" bioc:stroke="#15803d">
+        <dc:Bounds x="750" y="735" width="260" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-internal-transfer-detail_endEvent16_di" bpmnElement="fluxbank-internal-transfer-detail_endEvent16" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="940" y="920" width="32" height="32" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="870" y="959" width="172" height="40" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-internal-transfer-detail_Flow17_di" bpmnElement="fluxbank-internal-transfer-detail_Flow17">
+        <di:waypoint x="400" y="548.0" />
+        <di:waypoint x="450" y="548.0" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-internal-transfer-detail_Flow18_di" bpmnElement="fluxbank-internal-transfer-detail_Flow18">
+        <di:waypoint x="700" y="548.0" />
+        <di:waypoint x="750" y="548.0" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-internal-transfer-detail_Flow19_di" bpmnElement="fluxbank-internal-transfer-detail_Flow19">
+        <di:waypoint x="880" y="596" />
+        <di:waypoint x="880" y="660" />
+        <di:waypoint x="275" y="660" />
+        <di:waypoint x="275" y="735" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-internal-transfer-detail_Flow20_di" bpmnElement="fluxbank-internal-transfer-detail_Flow20">
+        <di:waypoint x="400" y="783.0" />
+        <di:waypoint x="450" y="783.0" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-internal-transfer-detail_Flow21_di" bpmnElement="fluxbank-internal-transfer-detail_Flow21">
+        <di:waypoint x="700" y="783.0" />
+        <di:waypoint x="750" y="783.0" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-internal-transfer-detail_Flow22_di" bpmnElement="fluxbank-internal-transfer-detail_Flow22">
+        <di:waypoint x="880.0" y="831" />
+        <di:waypoint x="880.0" y="875.5" />
+        <di:waypoint x="956.0" y="875.5" />
+        <di:waypoint x="956.0" y="920" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-internal-transfer-detail_Flow23_di" bpmnElement="fluxbank-internal-transfer-detail_Flow23">
+        <di:waypoint x="620" y="315" />
+        <di:waypoint x="620" y="355" />
+        <di:waypoint x="580" y="355" />
+        <di:waypoint x="580" y="425" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-internal-transfer-detail_serviceTask24_di" bpmnElement="fluxbank-internal-transfer-detail_serviceTask24" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="150" y="1160" width="300" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-internal-transfer-detail_Flow25_di" bpmnElement="fluxbank-internal-transfer-detail_Flow25">
+        <di:waypoint x="580" y="1015" />
+        <di:waypoint x="580" y="1120" />
+        <di:waypoint x="300" y="1120" />
+        <di:waypoint x="300" y="1160" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-internal-transfer-detail_boundaryEvent26_di" bpmnElement="fluxbank-internal-transfer-detail_boundaryEvent26" bioc:fill="#fff1f2" bioc:stroke="#be123c">
+        <dc:Bounds x="995" y="995" width="30" height="30" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="925" y="1032" width="170" height="40" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-internal-transfer-detail_serviceTask27_di" bpmnElement="fluxbank-internal-transfer-detail_serviceTask27" bioc:fill="#fff1f2" bioc:stroke="#be123c">
+        <dc:Bounds x="750" y="1160" width="260" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-internal-transfer-detail_Flow28_di" bpmnElement="fluxbank-internal-transfer-detail_Flow28" bioc:stroke="#be123c">
+        <di:waypoint x="1010" y="1025" />
+        <di:waypoint x="1085" y="1025" />
+        <di:waypoint x="1085" y="1208" />
+        <di:waypoint x="1010" y="1208" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-internal-transfer-detail_exclusiveGateway29_di" bpmnElement="fluxbank-internal-transfer-detail_exclusiveGateway29" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="865" y="1335" width="46" height="46" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="919" y="1388" width="150" height="40" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-internal-transfer-detail_Flow30_di" bpmnElement="fluxbank-internal-transfer-detail_Flow30">
+        <di:waypoint x="880.0" y="1256" />
+        <di:waypoint x="880.0" y="1295.5" />
+        <di:waypoint x="888.0" y="1295.5" />
+        <di:waypoint x="888.0" y="1335" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-internal-transfer-detail_serviceTask31_di" bpmnElement="fluxbank-internal-transfer-detail_serviceTask31" bioc:fill="#fff1f2" bioc:stroke="#be123c">
+        <dc:Bounds x="430" y="1490" width="290" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-internal-transfer-detail_serviceTask32_di" bpmnElement="fluxbank-internal-transfer-detail_serviceTask32" bioc:fill="#fff1f2" bioc:stroke="#be123c">
+        <dc:Bounds x="750" y="1490" width="260" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-internal-transfer-detail_Flow33_di" bpmnElement="fluxbank-internal-transfer-detail_Flow33" bioc:stroke="#be123c">
+        <di:waypoint x="865" y="1358" />
+        <di:waypoint x="575" y="1358" />
+        <di:waypoint x="575" y="1490" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="580" y="1410" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-internal-transfer-detail_Flow34_di" bpmnElement="fluxbank-internal-transfer-detail_Flow34" bioc:stroke="#be123c">
+        <di:waypoint x="911" y="1358" />
+        <di:waypoint x="1080" y="1358" />
+        <di:waypoint x="1080" y="1450" />
+        <di:waypoint x="880" y="1450" />
+        <di:waypoint x="880" y="1490" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="910" y="1410" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

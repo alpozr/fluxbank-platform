@@ -1,0 +1,273 @@
+<?xml version='1.0' encoding='utf-8'?>
+<bpmn:definitions xmlns:bioc="http://bpmn.io/schema/bpmn/biocolor/1.0" xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" id="Definitions_fluxbank-kafka-outbox-history-detail" targetNamespace="https://fluxbank.local/architecture" exporter="FluxBank architecture documentation" exporterVersion="2">
+  <bpmn:process id="fluxbank-kafka-outbox-history-detail_worker" name="FluxBank | Outbox worker" isExecutable="false">
+    <bpmn:laneSet id="fluxbank-kafka-outbox-history-detail_worker_lanes">
+      <bpmn:lane id="fluxbank-kafka-outbox-history-detail_worker_claim" name="Claim">
+        <bpmn:flowNodeRef>fluxbank-kafka-outbox-history-detail_startEvent1</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-kafka-outbox-history-detail_serviceTask2</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-kafka-outbox-history-detail_subProcess4</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="fluxbank-kafka-outbox-history-detail_worker_pub" name="Publish">
+        <bpmn:flowNodeRef>fluxbank-kafka-outbox-history-detail_serviceTask9</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-kafka-outbox-history-detail_serviceTask10</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-kafka-outbox-history-detail_exclusiveGateway13</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="fluxbank-kafka-outbox-history-detail_worker_res" name="Result">
+        <bpmn:flowNodeRef>fluxbank-kafka-outbox-history-detail_subProcess15</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-kafka-outbox-history-detail_subProcess17</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-kafka-outbox-history-detail_serviceTask23</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-kafka-outbox-history-detail_serviceTask24</bpmn:flowNodeRef>
+      </bpmn:lane>
+    </bpmn:laneSet>
+    <bpmn:startEvent id="fluxbank-kafka-outbox-history-detail_startEvent1" name="Poll every 2 seconds">
+      <bpmn:outgoing>fluxbank-kafka-outbox-history-detail_Flow3</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:serviceTask id="fluxbank-kafka-outbox-history-detail_serviceTask2" name="01 | Discover committed events&#10;OutboxPoller.poll()&#10;Batch size 20; sequential">
+      <bpmn:documentation>Fixed delay 2000ms; configurable; no transaction around the batch. Committed Outbox rows discovered by DB SELECT, not a message from finance.
+Sources: OutboxPoller.poll() — src/main/java/com/fluxbank/outbox/application/OutboxPoller.java:32</bpmn:documentation>
+      <bpmn:incoming>fluxbank-kafka-outbox-history-detail_Flow3</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-kafka-outbox-history-detail_Flow8</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="fluxbank-kafka-outbox-history-detail_Flow3" sourceRef="fluxbank-kafka-outbox-history-detail_startEvent1" targetRef="fluxbank-kafka-outbox-history-detail_serviceTask2" />
+    <bpmn:subProcess id="fluxbank-kafka-outbox-history-detail_subProcess4" name="TX-OUTBOX-CLAIM | claimBatch() [REQUIRES_NEW]">
+      <bpmn:documentation>Spring proxy starts this database transaction on entry. Successful return/flush commits all enclosed writes. RuntimeException or commit failure rolls back the enclosed writes. JPA SQL may be issued at flush; the diagram shows Java execution order. REQUIRED joins a caller transaction; the normal HTTP orchestration has no outer transaction.
+Sources: OutboxClaimService.claimBatch() — src/main/java/com/fluxbank/outbox/application/OutboxClaimService.java:22</bpmn:documentation>
+      <bpmn:incoming>fluxbank-kafka-outbox-history-detail_Flow8</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-kafka-outbox-history-detail_Flow11</bpmn:outgoing>
+      <bpmn:serviceTask id="fluxbank-kafka-outbox-history-detail_serviceTask5" name="02 | SELECT eligible PENDING&#10;findPendingForClaim()&#10;FOR UPDATE SKIP LOCKED">
+        <bpmn:documentation>status=PENDING and next_attempt_at null or &lt;=CURRENT_TIMESTAMP. ORDER BY created_at,id; LIMIT batchSize.
+Sources: OutboxEventRepository.findPendingForClaim() — src/main/java/com/fluxbank/outbox/repository/OutboxEventRepository.java:30</bpmn:documentation>
+        <bpmn:outgoing>fluxbank-kafka-outbox-history-detail_Flow7</bpmn:outgoing>
+      </bpmn:serviceTask>
+      <bpmn:serviceTask id="fluxbank-kafka-outbox-history-detail_serviceTask6" name="03 | Claim + COMMIT; release locks&#10;OutboxEvent.claim()&#10;PROCESSING; claimed_at=now">
+        <bpmn:documentation>UPDATE fluxbank.outbox_event. Return UUIDs only. Claim does not increment attempts.
+Sources: OutboxEvent.claim() — src/main/java/com/fluxbank/outbox/domain/OutboxEvent.java:82</bpmn:documentation>
+        <bpmn:incoming>fluxbank-kafka-outbox-history-detail_Flow7</bpmn:incoming>
+      </bpmn:serviceTask>
+      <bpmn:sequenceFlow id="fluxbank-kafka-outbox-history-detail_Flow7" sourceRef="fluxbank-kafka-outbox-history-detail_serviceTask5" targetRef="fluxbank-kafka-outbox-history-detail_serviceTask6" />
+    </bpmn:subProcess>
+    <bpmn:sequenceFlow id="fluxbank-kafka-outbox-history-detail_Flow8" sourceRef="fluxbank-kafka-outbox-history-detail_serviceTask2" targetRef="fluxbank-kafka-outbox-history-detail_subProcess4" />
+    <bpmn:serviceTask id="fluxbank-kafka-outbox-history-detail_serviceTask9" name="04 | Load PROCESSING event&#10;OutboxProcessor.process()&#10;NOT_SUPPORTED; capture attempt">
+      <bpmn:documentation>OutboxEventRepository.findByPublicId(). Non-PROCESSING is no-op. Fence snapshot=publicId,status,attempts,claimedAt.
+Sources: OutboxProcessor.process() — src/main/java/com/fluxbank/outbox/application/OutboxProcessor.java:27; OutboxAttempt.from() — src/main/java/com/fluxbank/outbox/application/OutboxAttempt.java:10</bpmn:documentation>
+      <bpmn:incoming>fluxbank-kafka-outbox-history-detail_Flow11</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-kafka-outbox-history-detail_Flow12</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="fluxbank-kafka-outbox-history-detail_serviceTask10" name="05 | Publish immutable snapshot&#10;TransferCompletedKafkaPublisher&#10;.publish() → send(...).join()">
+      <bpmn:documentation>Validate Outbox payload; eventId=Outbox.publicId; aggregateId=transferPublicId; occurredAt=Outbox.createdAt; key=transferPublicId.toString(). Await broker ACK with no claim DB transaction/lock held.
+Sources: TransferCompletedKafkaPublisher.publish() — src/main/java/com/fluxbank/transfer/infrastructure/kafka/TransferCompletedKafkaPublisher.java:25; TransferCompletedKafkaEvent — src/main/java/com/fluxbank/transfer/infrastructure/kafka/TransferCompletedKafkaEvent.java:15</bpmn:documentation>
+      <bpmn:incoming>fluxbank-kafka-outbox-history-detail_Flow12</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-kafka-outbox-history-detail_Flow14</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="fluxbank-kafka-outbox-history-detail_Flow11" sourceRef="fluxbank-kafka-outbox-history-detail_subProcess4" targetRef="fluxbank-kafka-outbox-history-detail_serviceTask9" />
+    <bpmn:sequenceFlow id="fluxbank-kafka-outbox-history-detail_Flow12" sourceRef="fluxbank-kafka-outbox-history-detail_serviceTask9" targetRef="fluxbank-kafka-outbox-history-detail_serviceTask10" />
+    <bpmn:exclusiveGateway id="fluxbank-kafka-outbox-history-detail_exclusiveGateway13" name="Send acknowledged?">
+      <bpmn:incoming>fluxbank-kafka-outbox-history-detail_Flow14</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-kafka-outbox-history-detail_Flow19</bpmn:outgoing>
+      <bpmn:outgoing>fluxbank-kafka-outbox-history-detail_Flow20</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="fluxbank-kafka-outbox-history-detail_Flow14" sourceRef="fluxbank-kafka-outbox-history-detail_serviceTask10" targetRef="fluxbank-kafka-outbox-history-detail_exclusiveGateway13" />
+    <bpmn:subProcess id="fluxbank-kafka-outbox-history-detail_subProcess15" name="TX-OUTBOX-RESULT | REQUIRES_NEW">
+      <bpmn:documentation>Spring proxy starts this database transaction on entry. Successful return/flush commits all enclosed writes. RuntimeException or commit failure rolls back the enclosed writes. JPA SQL may be issued at flush; the diagram shows Java execution order. REQUIRED joins a caller transaction; the normal HTTP orchestration has no outer transaction.
+Sources: OutboxProcessingTransaction.markProcessed() — src/main/java/com/fluxbank/outbox/application/OutboxProcessingTransaction.java:19</bpmn:documentation>
+      <bpmn:incoming>fluxbank-kafka-outbox-history-detail_Flow19</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-kafka-outbox-history-detail_Flow25</bpmn:outgoing>
+      <bpmn:serviceTask id="fluxbank-kafka-outbox-history-detail_serviceTask16" name="06a | Fence + mark PROCESSED&#10;OutboxProcessingTransaction&#10;.markProcessed()">
+        <bpmn:documentation>Lock row via findByPublicIdForUpdate(). Only PROCESSING and identical OutboxAttempt may update: status=PROCESSED, processed_at=now, last_error/next_attempt_at=null. attempts and claimed_at not reset.
+Sources: OutboxProcessingTransaction.markProcessed() — src/main/java/com/fluxbank/outbox/application/OutboxProcessingTransaction.java:19; OutboxEvent.markProcessed() — src/main/java/com/fluxbank/outbox/domain/OutboxEvent.java:90</bpmn:documentation>
+      </bpmn:serviceTask>
+    </bpmn:subProcess>
+    <bpmn:subProcess id="fluxbank-kafka-outbox-history-detail_subProcess17" name="TX-OUTBOX-FAILURE | REQUIRES_NEW">
+      <bpmn:documentation>Spring proxy starts this database transaction on entry. Successful return/flush commits all enclosed writes. RuntimeException or commit failure rolls back the enclosed writes. JPA SQL may be issued at flush; the diagram shows Java execution order. REQUIRED joins a caller transaction; the normal HTTP orchestration has no outer transaction.
+Sources: OutboxFailureService.recordFailure() — src/main/java/com/fluxbank/outbox/application/OutboxFailureService.java:20</bpmn:documentation>
+      <bpmn:incoming>fluxbank-kafka-outbox-history-detail_Flow20</bpmn:incoming>
+      <bpmn:incoming>fluxbank-kafka-outbox-history-detail_Flow22</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-kafka-outbox-history-detail_Flow26</bpmn:outgoing>
+      <bpmn:serviceTask id="fluxbank-kafka-outbox-history-detail_serviceTask18" name="06b | Fence + record failure&#10;OutboxFailureService.recordFailure()&#10;OutboxEvent.recordFailure()">
+        <bpmn:documentation>Same attempt + eligible check. attempts++; sanitized last_error. Transient and attempts&lt;5: PENDING+backoff, clear claimed_at. Otherwise FAILED. Details: fluxbank-transfer-recovery-detail.bpmn.
+Sources: OutboxFailureService.recordFailure() — src/main/java/com/fluxbank/outbox/application/OutboxFailureService.java:20; OutboxEvent.recordFailure() — src/main/java/com/fluxbank/outbox/domain/OutboxEvent.java:105</bpmn:documentation>
+      </bpmn:serviceTask>
+    </bpmn:subProcess>
+    <bpmn:sequenceFlow id="fluxbank-kafka-outbox-history-detail_Flow19" sourceRef="fluxbank-kafka-outbox-history-detail_exclusiveGateway13" targetRef="fluxbank-kafka-outbox-history-detail_subProcess15" name="ACK received" />
+    <bpmn:sequenceFlow id="fluxbank-kafka-outbox-history-detail_Flow20" sourceRef="fluxbank-kafka-outbox-history-detail_exclusiveGateway13" targetRef="fluxbank-kafka-outbox-history-detail_subProcess17" name="Send exception" />
+    <bpmn:boundaryEvent id="fluxbank-kafka-outbox-history-detail_boundaryEvent21" name="Result TX failure" attachedToRef="fluxbank-kafka-outbox-history-detail_subProcess15" cancelActivity="true">
+      <bpmn:outgoing>fluxbank-kafka-outbox-history-detail_Flow22</bpmn:outgoing>
+      <bpmn:errorEventDefinition id="fluxbank-kafka-outbox-history-detail_boundaryEvent21_error" />
+    </bpmn:boundaryEvent>
+    <bpmn:sequenceFlow id="fluxbank-kafka-outbox-history-detail_Flow22" sourceRef="fluxbank-kafka-outbox-history-detail_boundaryEvent21" targetRef="fluxbank-kafka-outbox-history-detail_subProcess17" name="Record failure separately" />
+    <bpmn:serviceTask id="fluxbank-kafka-outbox-history-detail_serviceTask23" name="Producer success ≠ History success&#10;ACK / PROCESSED does not wait&#10;for the History consumer">
+      <bpmn:documentation>ACK and result UPDATE are not a distributed transaction. Crash after ACK can cause duplicate publish. Continue at fluxbank-history-consumer-detail.bpmn.</bpmn:documentation>
+      <bpmn:incoming>fluxbank-kafka-outbox-history-detail_Flow25</bpmn:incoming>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="fluxbank-kafka-outbox-history-detail_serviceTask24" name="Retry / recovery / terminal failure&#10;See transfer-recovery detail page&#10;Poller continues to the next event">
+      <bpmn:documentation>Bookkeeping error is suppressed on original failure; stale recovery can later reclaim. FAILED rows remain stored, no automatic re-drive.
+Sources: OutboxPoller.poll() — src/main/java/com/fluxbank/outbox/application/OutboxPoller.java:32</bpmn:documentation>
+      <bpmn:incoming>fluxbank-kafka-outbox-history-detail_Flow26</bpmn:incoming>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="fluxbank-kafka-outbox-history-detail_Flow25" sourceRef="fluxbank-kafka-outbox-history-detail_subProcess15" targetRef="fluxbank-kafka-outbox-history-detail_serviceTask23" />
+    <bpmn:sequenceFlow id="fluxbank-kafka-outbox-history-detail_Flow26" sourceRef="fluxbank-kafka-outbox-history-detail_subProcess17" targetRef="fluxbank-kafka-outbox-history-detail_serviceTask24" />
+  </bpmn:process>
+  <bpmn:process id="fluxbank-kafka-outbox-history-detail_broker" name="Kafka | fluxbank.transfer-events.v1" isExecutable="false">
+    <bpmn:receiveTask id="fluxbank-kafka-outbox-history-detail_receiveTask27" name="TRANSFER_COMPLETED&#10;Key: transferPublicId&#10;acks=all; enable.idempotence=true">
+      <bpmn:documentation>Stable key routing within partition; no account-wide/global order. App-level resends can duplicate despite producer idempotence. Topic provisioning is not application-managed.</bpmn:documentation>
+    </bpmn:receiveTask>
+  </bpmn:process>
+  <bpmn:collaboration id="Collaboration_fluxbank-kafka-outbox-history-detail">
+    <bpmn:documentation>05 | Outbox → Kafka publication
+Source: current working tree, 2026-11-08. Documentation only; isExecutable=false. Solid arrows = local execution order. Dashed arrows = HTTP/Kafka messages across pools. Green expanded subprocess = Spring database transaction, not BPMN compensation semantics. Red = failure; amber = retry/recovery. DB visibility is by commit and SELECT, not an in-memory message. Open README.md for the source index and linked pages.</bpmn:documentation>
+    <bpmn:participant id="fluxbank-kafka-outbox-history-detail_worker_pool" name="FluxBank | Outbox worker" processRef="fluxbank-kafka-outbox-history-detail_worker" />
+    <bpmn:participant id="fluxbank-kafka-outbox-history-detail_broker_pool" name="Kafka | fluxbank.transfer-events.v1" processRef="fluxbank-kafka-outbox-history-detail_broker" />
+    <bpmn:messageFlow id="fluxbank-kafka-outbox-history-detail_Message28" sourceRef="fluxbank-kafka-outbox-history-detail_serviceTask10" targetRef="fluxbank-kafka-outbox-history-detail_receiveTask27" name="Kafka publication" />
+  </bpmn:collaboration>
+  <bpmndi:BPMNDiagram id="Diagram_fluxbank-kafka-outbox-history-detail" name="05 | Outbox → Kafka publication">
+    <bpmndi:BPMNPlane id="Plane_fluxbank-kafka-outbox-history-detail" bpmnElement="Collaboration_fluxbank-kafka-outbox-history-detail">
+      <bpmndi:BPMNShape id="fluxbank-kafka-outbox-history-detail_worker_pool_di" bpmnElement="fluxbank-kafka-outbox-history-detail_worker_pool" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="20" y="20" width="1120" height="1510" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-kafka-outbox-history-detail_worker_claim_di" bpmnElement="fluxbank-kafka-outbox-history-detail_worker_claim" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="50" y="20" width="1090" height="405" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-kafka-outbox-history-detail_worker_pub_di" bpmnElement="fluxbank-kafka-outbox-history-detail_worker_pub" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="50" y="425" width="1090" height="390" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-kafka-outbox-history-detail_worker_res_di" bpmnElement="fluxbank-kafka-outbox-history-detail_worker_res" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="50" y="815" width="1090" height="715" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-kafka-outbox-history-detail_startEvent1_di" bpmnElement="fluxbank-kafka-outbox-history-detail_startEvent1" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="110" y="75" width="32" height="32" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="40" y="114" width="172" height="40" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-kafka-outbox-history-detail_serviceTask2_di" bpmnElement="fluxbank-kafka-outbox-history-detail_serviceTask2" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="230" y="50" width="260" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-kafka-outbox-history-detail_Flow3_di" bpmnElement="fluxbank-kafka-outbox-history-detail_Flow3">
+        <di:waypoint x="142" y="91.0" />
+        <di:waypoint x="186.0" y="91.0" />
+        <di:waypoint x="186.0" y="98.0" />
+        <di:waypoint x="230" y="98.0" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-kafka-outbox-history-detail_subProcess4_di" bpmnElement="fluxbank-kafka-outbox-history-detail_subProcess4" bioc:fill="#f0fdf4" bioc:stroke="#15803d" isExpanded="true">
+        <dc:Bounds x="120" y="215" width="920" height="150" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-kafka-outbox-history-detail_serviceTask5_di" bpmnElement="fluxbank-kafka-outbox-history-detail_serviceTask5" bioc:fill="#f0fdf4" bioc:stroke="#15803d">
+        <dc:Bounds x="150" y="250" width="380" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-kafka-outbox-history-detail_serviceTask6_di" bpmnElement="fluxbank-kafka-outbox-history-detail_serviceTask6" bioc:fill="#f0fdf4" bioc:stroke="#15803d">
+        <dc:Bounds x="630" y="250" width="380" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-kafka-outbox-history-detail_Flow7_di" bpmnElement="fluxbank-kafka-outbox-history-detail_Flow7">
+        <di:waypoint x="530" y="290.0" />
+        <di:waypoint x="630" y="290.0" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-kafka-outbox-history-detail_Flow8_di" bpmnElement="fluxbank-kafka-outbox-history-detail_Flow8">
+        <di:waypoint x="360.0" y="146" />
+        <di:waypoint x="360.0" y="180.5" />
+        <di:waypoint x="580.0" y="180.5" />
+        <di:waypoint x="580.0" y="215" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-kafka-outbox-history-detail_serviceTask9_di" bpmnElement="fluxbank-kafka-outbox-history-detail_serviceTask9" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="150" y="475" width="300" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-kafka-outbox-history-detail_serviceTask10_di" bpmnElement="fluxbank-kafka-outbox-history-detail_serviceTask10" bioc:fill="#eff6ff" bioc:stroke="#1d4ed8">
+        <dc:Bounds x="750" y="475" width="260" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-kafka-outbox-history-detail_Flow11_di" bpmnElement="fluxbank-kafka-outbox-history-detail_Flow11">
+        <di:waypoint x="580" y="365" />
+        <di:waypoint x="580" y="400" />
+        <di:waypoint x="300" y="400" />
+        <di:waypoint x="300" y="475" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-kafka-outbox-history-detail_Flow12_di" bpmnElement="fluxbank-kafka-outbox-history-detail_Flow12">
+        <di:waypoint x="450" y="523.0" />
+        <di:waypoint x="750" y="523.0" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-kafka-outbox-history-detail_exclusiveGateway13_di" bpmnElement="fluxbank-kafka-outbox-history-detail_exclusiveGateway13" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="555" y="690" width="46" height="46" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="609" y="743" width="150" height="40" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-kafka-outbox-history-detail_Flow14_di" bpmnElement="fluxbank-kafka-outbox-history-detail_Flow14">
+        <di:waypoint x="880" y="571" />
+        <di:waypoint x="880" y="640" />
+        <di:waypoint x="578" y="640" />
+        <di:waypoint x="578" y="690" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-kafka-outbox-history-detail_subProcess15_di" bpmnElement="fluxbank-kafka-outbox-history-detail_subProcess15" bioc:fill="#f0fdf4" bioc:stroke="#15803d" isExpanded="true">
+        <dc:Bounds x="120" y="865" width="440" height="290" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-kafka-outbox-history-detail_serviceTask16_di" bpmnElement="fluxbank-kafka-outbox-history-detail_serviceTask16" bioc:fill="#f0fdf4" bioc:stroke="#15803d">
+        <dc:Bounds x="150" y="945" width="380" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-kafka-outbox-history-detail_subProcess17_di" bpmnElement="fluxbank-kafka-outbox-history-detail_subProcess17" bioc:fill="#f0fdf4" bioc:stroke="#15803d" isExpanded="true">
+        <dc:Bounds x="600" y="865" width="440" height="290" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-kafka-outbox-history-detail_serviceTask18_di" bpmnElement="fluxbank-kafka-outbox-history-detail_serviceTask18" bioc:fill="#fffbeb" bioc:stroke="#a16207">
+        <dc:Bounds x="630" y="945" width="380" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-kafka-outbox-history-detail_Flow19_di" bpmnElement="fluxbank-kafka-outbox-history-detail_Flow19" bioc:stroke="#15803d">
+        <di:waypoint x="555" y="713" />
+        <di:waypoint x="340" y="713" />
+        <di:waypoint x="340" y="865" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="260" y="790" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-kafka-outbox-history-detail_Flow20_di" bpmnElement="fluxbank-kafka-outbox-history-detail_Flow20" bioc:stroke="#be123c">
+        <di:waypoint x="601" y="713" />
+        <di:waypoint x="820" y="713" />
+        <di:waypoint x="820" y="865" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="790" y="790" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-kafka-outbox-history-detail_boundaryEvent21_di" bpmnElement="fluxbank-kafka-outbox-history-detail_boundaryEvent21" bioc:fill="#fff1f2" bioc:stroke="#be123c">
+        <dc:Bounds x="515" y="1140" width="30" height="30" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="445" y="1177" width="170" height="40" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-kafka-outbox-history-detail_Flow22_di" bpmnElement="fluxbank-kafka-outbox-history-detail_Flow22" bioc:stroke="#be123c">
+        <di:waypoint x="530" y="1170" />
+        <di:waypoint x="530" y="1200" />
+        <di:waypoint x="1080" y="1200" />
+        <di:waypoint x="1080" y="900" />
+        <di:waypoint x="1040" y="900" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="775" y="1170" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-kafka-outbox-history-detail_serviceTask23_di" bpmnElement="fluxbank-kafka-outbox-history-detail_serviceTask23" bioc:fill="#eff6ff" bioc:stroke="#1d4ed8">
+        <dc:Bounds x="150" y="1320" width="380" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-kafka-outbox-history-detail_serviceTask24_di" bpmnElement="fluxbank-kafka-outbox-history-detail_serviceTask24" bioc:fill="#fffbeb" bioc:stroke="#a16207">
+        <dc:Bounds x="630" y="1320" width="380" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-kafka-outbox-history-detail_Flow25_di" bpmnElement="fluxbank-kafka-outbox-history-detail_Flow25">
+        <di:waypoint x="340.0" y="1155" />
+        <di:waypoint x="340.0" y="1320" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-kafka-outbox-history-detail_Flow26_di" bpmnElement="fluxbank-kafka-outbox-history-detail_Flow26">
+        <di:waypoint x="820" y="1155" />
+        <di:waypoint x="820" y="1320" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-kafka-outbox-history-detail_broker_pool_di" bpmnElement="fluxbank-kafka-outbox-history-detail_broker_pool" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="20" y="1570" width="1120" height="180" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-kafka-outbox-history-detail_receiveTask27_di" bpmnElement="fluxbank-kafka-outbox-history-detail_receiveTask27" bioc:fill="#eff6ff" bioc:stroke="#1d4ed8">
+        <dc:Bounds x="750" y="1610" width="260" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-kafka-outbox-history-detail_Message28_di" bpmnElement="fluxbank-kafka-outbox-history-detail_Message28">
+        <di:waypoint x="1010" y="523" />
+        <di:waypoint x="1110" y="523" />
+        <di:waypoint x="1110" y="1658" />
+        <di:waypoint x="1010" y="1658" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="920" y="1540" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

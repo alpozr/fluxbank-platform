@@ -4,6 +4,9 @@ import com.fluxbank.outbox.application.*;
 import com.fluxbank.outbox.domain.OutboxStatus;
 import com.fluxbank.outbox.repository.OutboxEventRepository;
 import com.fluxbank.transfer.infrastructure.kafka.TransferCompletedKafkaEvent;
+import com.fluxbank.transfer.domain.TransferType;
+import com.fluxbank.account.domain.CurrencyCode;
+import java.math.BigDecimal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -58,7 +61,44 @@ class OutboxProcessorIntegrationTest extends DatabaseIntegrationTestSupport {
         assertBalance(f.destination(), external ? "500" : "700", "0", external ? "500" : "700");
         assertEquals("COMPLETED", state(transferId).get("status"));
         verify(kafkaTemplate).send(eq("fluxbank.transfer-events.v1"), eq(transferId.toString()),
-                argThat(message -> eventId.equals(message.eventId()) && transferId.equals(message.transferPublicId())));
+                argThat(message -> eventId.equals(message.eventId()) && transferId.equals(message.transferPublicId())
+                        && message.transferType() == (external ? TransferType.EXTERNAL : TransferType.INTERNAL)
+                        && f.source().getPublicId().equals(message.sourceAccountPublicId())
+                        && java.util.Objects.equals(external ? null : f.destination().getPublicId(), message.destinationAccountPublicId())
+                        && new BigDecimal("200").compareTo(message.amount()) == 0 && message.currency() == CurrencyCode.EUR));
+    }
+
+    @Test
+    void kafkaSnapshotComesFromCommittedOutboxEvenIfTransferDataChangesLater() {
+        Fixture f = fixture("1000", "500");
+        UUID transferId = complete(f, false);
+        UUID eventId = claims.claimBatch(1).get(0);
+        // Deliberate test-only SQL change: publication must never reconstruct a
+        // historical snapshot from later transfer/account state.
+        jdbc.update("UPDATE fluxbank.transfers SET amount=999, currency='USD' WHERE public_id=?", transferId);
+
+        processor.process(eventId);
+
+        verify(kafkaTemplate).send(anyString(), eq(transferId.toString()), argThat(message ->
+                eventId.equals(message.eventId()) && new BigDecimal("200").compareTo(message.amount()) == 0
+                        && message.currency() == CurrencyCode.EUR && f.source().getPublicId().equals(message.sourceAccountPublicId())
+                        && f.destination().getPublicId().equals(message.destinationAccountPublicId())));
+        assertTrue(history(transferId).isEmpty());
+    }
+
+    @Test
+    void financialSnapshotPreservesFullMonetaryPrecisionThroughPostgresJsonb() {
+        Fixture f = fixture("999999999999999.9999", "0");
+        BigDecimal amount = new BigDecimal("987654321012345.6789");
+        UUID transferId = pending(f, amount.toPlainString());
+        process(f, transferId);
+        UUID eventId = claims.claimBatch(1).get(0);
+
+        processor.process(eventId);
+
+        verify(kafkaTemplate).send(anyString(), eq(transferId.toString()), argThat(message ->
+                amount.equals(message.amount()) && message.eventId().equals(eventId)));
+        assertEquals("987654321012345.6789", events.findByPublicId(eventId).orElseThrow().getPayload().get("amount").asText());
     }
 
     @Test

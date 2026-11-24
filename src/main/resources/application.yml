@@ -4,6 +4,19 @@ spring:
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: ${KAFKA_TRANSFER_EVENTS_GROUP_ID:fluxbank.transaction-history.v1}
+      enable-auto-commit: false
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      properties:
+        "[spring.deserializer.value.delegate.class]": org.springframework.kafka.support.serializer.JsonDeserializer
+        "[spring.json.value.default.type]": com.fluxbank.transfer.infrastructure.kafka.TransferCompletedKafkaEvent
+        "[spring.json.use.type.headers]": false
+        "[spring.json.trusted.packages]": com.fluxbank.transfer.infrastructure.kafka
+    listener:
+      ack-mode: record
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
@@ -34,6 +47,11 @@ spring:
 kafka:
   topics:
     transfer-events: ${KAFKA_TRANSFER_EVENTS_TOPIC:fluxbank.transfer-events.v1}
+    transfer-events-dlq: ${KAFKA_TRANSFER_EVENTS_DLQ_TOPIC:${kafka.topics.transfer-events}.DLT}
+  consumer:
+    enabled: ${KAFKA_TRANSFER_EVENTS_CONSUMER_ENABLED:true}
+    max-retries: ${KAFKA_TRANSFER_EVENTS_MAX_RETRIES:2}
+    retry-interval-ms: ${KAFKA_TRANSFER_EVENTS_RETRY_INTERVAL_MS:1000}
 
 security:
   jwt:

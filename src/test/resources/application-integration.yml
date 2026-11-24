@@ -14,6 +14,11 @@ outbox:
     # Recovery tests explicitly control stale-event transitions.
     enabled: false
 
+kafka:
+  consumer:
+    # Listener integration tests explicitly enable and start the consumer.
+    enabled: false
+
 security:
   jwt:
     # Test-only key so the application context does not require JWT_SECRET.

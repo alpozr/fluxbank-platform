@@ -8,11 +8,16 @@ import org.apache.kafka.common.KafkaException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.EnumSource;
+import com.fluxbank.account.domain.CurrencyCode;
+import com.fluxbank.transfer.domain.TransferType;
+import com.fluxbank.transfer.application.TransferCompletedEvent;
 import org.mockito.ArgumentCaptor;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 
 import java.time.Instant;
+import java.math.BigDecimal;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -23,9 +28,53 @@ import static org.mockito.Mockito.*;
 class TransferCompletedKafkaPublisherTest {
     @SuppressWarnings("unchecked")
     private final KafkaTemplate<String, TransferCompletedKafkaEvent> template = mock(KafkaTemplate.class);
-    private final TransferCompletedKafkaPublisher publisher = new TransferCompletedKafkaPublisher(template, "configured.transfer-events.v1");
+    private final TransferCompletedKafkaPublisher publisher = new TransferCompletedKafkaPublisher(template, "configured.transfer-events.v1", new ObjectMapper());
     private final UUID transferId = UUID.randomUUID();
     private final Instant createdAt = Instant.parse("2026-10-28T12:34:56Z");
+
+    @ParameterizedTest
+    @EnumSource(TransferType.class)
+    void publishesStoredBusinessSnapshotAndPreservesIdentityAcrossAttempts(TransferType type) {
+        UUID source = UUID.randomUUID();
+        UUID destination = type == TransferType.INTERNAL ? UUID.randomUUID() : null;
+        var snapshot = new TransferCompletedEvent(transferId, type, source, destination,
+                new BigDecimal("987.6543"), CurrencyCode.EUR);
+        OutboxEvent event = timestamped(OutboxEvent.create("TRANSFER_COMPLETED", transferId,
+                new ObjectMapper().valueToTree(snapshot)));
+        when(template.send(anyString(), anyString(), any(TransferCompletedKafkaEvent.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
+
+        publisher.publish(event);
+        publisher.publish(event);
+
+        var captor = ArgumentCaptor.forClass(TransferCompletedKafkaEvent.class);
+        verify(template, times(2)).send(eq("configured.transfer-events.v1"), eq(transferId.toString()), captor.capture());
+        var sent = captor.getAllValues().get(0);
+        assertEquals(event.getPublicId(), sent.eventId());
+        assertEquals(createdAt, sent.occurredAt());
+        assertEquals(type, sent.transferType());
+        assertEquals(source, sent.sourceAccountPublicId());
+        assertEquals(destination, sent.destinationAccountPublicId());
+        assertEquals(new BigDecimal("987.6543"), sent.amount());
+        assertEquals(CurrencyCode.EUR, sent.currency());
+        assertEquals(sent, captor.getAllValues().get(1));
+        assertUnchanged(event);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "{\"transferType\":\"INTERNAL\"}",
+            "{\"transferType\":null}",
+            "{\"amount\":-1}",
+            "{\"currency\":\"UNKNOWN\"}",
+            "{\"transferType\":\"UNKNOWN\"}"})
+    void rejectsIncompleteOrInvalidSnapshotsBeforeSending(String fields) throws Exception {
+        var payload = (com.fasterxml.jackson.databind.node.ObjectNode) new ObjectMapper().readTree(fields);
+        payload.put("transferPublicId", transferId.toString());
+        OutboxEvent event = timestamped(OutboxEvent.create("TRANSFER_COMPLETED", transferId, payload));
+        assertThrows(IllegalArgumentException.class, () -> publisher.publish(event));
+        verifyNoInteractions(template);
+    }
 
     @Test
     void mapsStableOutboxIdentityAndFieldsToConfiguredTopicWithTransferKey() {

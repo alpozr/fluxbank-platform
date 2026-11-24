@@ -1,0 +1,262 @@
+<?xml version='1.0' encoding='utf-8'?>
+<bpmn:definitions xmlns:bioc="http://bpmn.io/schema/bpmn/biocolor/1.0" xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" id="Definitions_fluxbank-transfer-recovery-detail" targetNamespace="https://fluxbank.local/architecture" exporter="FluxBank architecture documentation" exporterVersion="2">
+  <bpmn:process id="fluxbank-transfer-recovery-detail_outbox" name="FluxBank | Outbox retry / stale recovery" isExecutable="false">
+    <bpmn:laneSet id="fluxbank-transfer-recovery-detail_outbox_lanes">
+      <bpmn:lane id="fluxbank-transfer-recovery-detail_outbox_detect" name="Detect">
+        <bpmn:flowNodeRef>fluxbank-transfer-recovery-detail_serviceTask1</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-transfer-recovery-detail_serviceTask2</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="fluxbank-transfer-recovery-detail_outbox_record" name="Record">
+        <bpmn:flowNodeRef>fluxbank-transfer-recovery-detail_serviceTask3</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-transfer-recovery-detail_exclusiveGateway6</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-transfer-recovery-detail_serviceTask8</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-transfer-recovery-detail_serviceTask9</bpmn:flowNodeRef>
+      </bpmn:lane>
+    </bpmn:laneSet>
+    <bpmn:serviceTask id="fluxbank-transfer-recovery-detail_serviceTask1" name="Stale PROCESSING claim (&gt;5 min)&#10;OutboxRecoveryScheduler.recover()&#10;→ recoverStaleBatch(20)">
+      <bpmn:documentation>Every 60 seconds. REQUIRES_NEW TX. findStaleForRecovery(cutoff,batchSize): ORDER BY claimed_at,id LIMIT ... FOR UPDATE SKIP LOCKED. Recent/locked claims skipped. Crash after producer ACK can enter this path.
+Sources: OutboxRecoveryScheduler.recover() — src/main/java/com/fluxbank/outbox/application/OutboxRecoveryScheduler.java:24; OutboxRecoveryService.recoverStaleBatch() — src/main/java/com/fluxbank/outbox/application/OutboxRecoveryService.java:23</bpmn:documentation>
+      <bpmn:outgoing>fluxbank-transfer-recovery-detail_Flow4</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="fluxbank-transfer-recovery-detail_serviceTask2" name="Publish / result exception&#10;OutboxFailureService.recordFailure()&#10;REQUIRES_NEW">
+      <bpmn:documentation>Lock row and compare OutboxAttempt snapshot; stale worker cannot overwrite a newer claim. Bookkeeping failure does not erase original failure.
+Sources: OutboxFailureService.recordFailure() — src/main/java/com/fluxbank/outbox/application/OutboxFailureService.java:20</bpmn:documentation>
+      <bpmn:outgoing>fluxbank-transfer-recovery-detail_Flow5</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="fluxbank-transfer-recovery-detail_serviceTask3" name="Consume failure budget&#10;OutboxEvent.recordFailure()&#10;attempts++; sanitized last_error">
+      <bpmn:documentation>Recovery calls recordFailure(true,...); normal failure uses retry classification. Retryable: transient/recoverable DB, CannotCreateTransactionException, Kafka RetriableException. Unwrap only CompletionException, ExecutionException, KafkaException. attempts counts failures/recovery, not claims.
+Sources: OutboxEvent.recordFailure() — src/main/java/com/fluxbank/outbox/domain/OutboxEvent.java:105; OutboxRetryPolicy.isRetryable() — src/main/java/com/fluxbank/outbox/application/OutboxRetryPolicy.java:49; OutboxRetryPolicy.delay() — src/main/java/com/fluxbank/outbox/application/OutboxRetryPolicy.java:35</bpmn:documentation>
+      <bpmn:incoming>fluxbank-transfer-recovery-detail_Flow4</bpmn:incoming>
+      <bpmn:incoming>fluxbank-transfer-recovery-detail_Flow5</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-transfer-recovery-detail_Flow7</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="fluxbank-transfer-recovery-detail_Flow4" sourceRef="fluxbank-transfer-recovery-detail_serviceTask1" targetRef="fluxbank-transfer-recovery-detail_serviceTask3" />
+    <bpmn:sequenceFlow id="fluxbank-transfer-recovery-detail_Flow5" sourceRef="fluxbank-transfer-recovery-detail_serviceTask2" targetRef="fluxbank-transfer-recovery-detail_serviceTask3" />
+    <bpmn:exclusiveGateway id="fluxbank-transfer-recovery-detail_exclusiveGateway6" name="Retryable and attempts &lt; 5?">
+      <bpmn:incoming>fluxbank-transfer-recovery-detail_Flow7</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-transfer-recovery-detail_Flow10</bpmn:outgoing>
+      <bpmn:outgoing>fluxbank-transfer-recovery-detail_Flow11</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="fluxbank-transfer-recovery-detail_Flow7" sourceRef="fluxbank-transfer-recovery-detail_serviceTask3" targetRef="fluxbank-transfer-recovery-detail_exclusiveGateway6" />
+    <bpmn:serviceTask id="fluxbank-transfer-recovery-detail_serviceTask8" name="PENDING + scheduled backoff&#10;5s → 10s → 20s → 40s&#10;Normal poller claims when due">
+      <bpmn:documentation>next_attempt_at=now+min(5s*2^(attempt-1),5m); claimed_at=null. No direct publish from recovery. Stable eventId reused; duplicates remain possible.
+Sources: OutboxEvent.recordFailure() — src/main/java/com/fluxbank/outbox/domain/OutboxEvent.java:105; OutboxRetryPolicy.delay() — src/main/java/com/fluxbank/outbox/application/OutboxRetryPolicy.java:35</bpmn:documentation>
+      <bpmn:incoming>fluxbank-transfer-recovery-detail_Flow10</bpmn:incoming>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="fluxbank-transfer-recovery-detail_serviceTask9" name="FAILED | retain row&#10;Permanent error or exhausted budget&#10;No automatic re-drive">
+      <bpmn:documentation>next_attempt_at=null; claimed_at not cleared on FAILED. No DELETE. Fencing protects DB bookkeeping, not duplicate Kafka sends.
+Sources: OutboxEvent.recordFailure() — src/main/java/com/fluxbank/outbox/domain/OutboxEvent.java:105</bpmn:documentation>
+      <bpmn:incoming>fluxbank-transfer-recovery-detail_Flow11</bpmn:incoming>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="fluxbank-transfer-recovery-detail_Flow10" sourceRef="fluxbank-transfer-recovery-detail_exclusiveGateway6" targetRef="fluxbank-transfer-recovery-detail_serviceTask8" name="Yes: retry" />
+    <bpmn:sequenceFlow id="fluxbank-transfer-recovery-detail_Flow11" sourceRef="fluxbank-transfer-recovery-detail_exclusiveGateway6" targetRef="fluxbank-transfer-recovery-detail_serviceTask9" name="No: terminal" />
+  </bpmn:process>
+  <bpmn:process id="fluxbank-transfer-recovery-detail_consumer" name="FluxBank | Consumer retry and DLT" isExecutable="false">
+    <bpmn:laneSet id="fluxbank-transfer-recovery-detail_consumer_lanes">
+      <bpmn:lane id="fluxbank-transfer-recovery-detail_consumer_classify" name="Classify">
+        <bpmn:flowNodeRef>fluxbank-transfer-recovery-detail_serviceTask12</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-transfer-recovery-detail_exclusiveGateway13</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="fluxbank-transfer-recovery-detail_consumer_retry" name="Retry / recover">
+        <bpmn:flowNodeRef>fluxbank-transfer-recovery-detail_serviceTask15</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-transfer-recovery-detail_serviceTask16</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-transfer-recovery-detail_exclusiveGateway19</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-transfer-recovery-detail_serviceTask21</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-transfer-recovery-detail_serviceTask22</bpmn:flowNodeRef>
+      </bpmn:lane>
+    </bpmn:laneSet>
+    <bpmn:serviceTask id="fluxbank-transfer-recovery-detail_serviceTask12" name="Listener TX failure / invalid event&#10;DefaultErrorHandler&#10;transferEventsErrorHandler()">
+      <bpmn:documentation>TransientDataAccessException, RecoverableDataAccessException, CannotCreateTransactionException retryable (nested causes). Other failures non-retryable: malformed JSON, invalid/legacy event, partial History, integrity errors.
+Sources: TransferEventsConsumerConfiguration.transferEventsErrorHandler() — src/main/java/com/fluxbank/transaction/infrastructure/kafka/TransferEventsConsumerConfiguration.java:43</bpmn:documentation>
+      <bpmn:outgoing>fluxbank-transfer-recovery-detail_Flow14</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:exclusiveGateway id="fluxbank-transfer-recovery-detail_exclusiveGateway13" name="Transient with retry left?">
+      <bpmn:incoming>fluxbank-transfer-recovery-detail_Flow14</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-transfer-recovery-detail_Flow17</bpmn:outgoing>
+      <bpmn:outgoing>fluxbank-transfer-recovery-detail_Flow18</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="fluxbank-transfer-recovery-detail_Flow14" sourceRef="fluxbank-transfer-recovery-detail_serviceTask12" targetRef="fluxbank-transfer-recovery-detail_exclusiveGateway13" />
+    <bpmn:serviceTask id="fluxbank-transfer-recovery-detail_serviceTask15" name="Redeliver original source record&#10;FixedBackOff(1000 ms, 2 retries)&#10;Up to 3 business deliveries">
+      <bpmn:documentation>Same eventId and source offset. Failed TX leaves no marker. Next delivery repeats listener/processor. See fluxbank-history-consumer-detail.bpmn.</bpmn:documentation>
+      <bpmn:incoming>fluxbank-transfer-recovery-detail_Flow17</bpmn:incoming>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="fluxbank-transfer-recovery-detail_serviceTask16" name="Publish to configured DLT&#10;DeadLetterPublishingRecoverer&#10;Wait for broker ACK">
+      <bpmn:documentation>Destination partition -1; default topic fluxbank.transfer-events.v1.DLT. DelegatingByTypeSerializer sends normal event JSON or original malformed byte[]. setFailIfSendResultIsError(true); setResetStateOnRecoveryFailure(false).
+Sources: TransferEventsConsumerConfiguration.transferEventsErrorHandler() — src/main/java/com/fluxbank/transaction/infrastructure/kafka/TransferEventsConsumerConfiguration.java:43</bpmn:documentation>
+      <bpmn:incoming>fluxbank-transfer-recovery-detail_Flow18</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-transfer-recovery-detail_Flow20</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="fluxbank-transfer-recovery-detail_Flow17" sourceRef="fluxbank-transfer-recovery-detail_exclusiveGateway13" targetRef="fluxbank-transfer-recovery-detail_serviceTask15" name="Yes: retry" />
+    <bpmn:sequenceFlow id="fluxbank-transfer-recovery-detail_Flow18" sourceRef="fluxbank-transfer-recovery-detail_exclusiveGateway13" targetRef="fluxbank-transfer-recovery-detail_serviceTask16" name="No: recover to DLT" />
+    <bpmn:exclusiveGateway id="fluxbank-transfer-recovery-detail_exclusiveGateway19" name="DLT ACK received?">
+      <bpmn:incoming>fluxbank-transfer-recovery-detail_Flow20</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-transfer-recovery-detail_Flow23</bpmn:outgoing>
+      <bpmn:outgoing>fluxbank-transfer-recovery-detail_Flow24</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="fluxbank-transfer-recovery-detail_Flow20" sourceRef="fluxbank-transfer-recovery-detail_serviceTask16" targetRef="fluxbank-transfer-recovery-detail_exclusiveGateway19" />
+    <bpmn:serviceTask id="fluxbank-transfer-recovery-detail_serviceTask21" name="Recovery complete&#10;Source offset may advance&#10;History was not created for this event">
+      <bpmn:documentation>DLT ACK does not create History. No production DLT replay consumer or endpoint is implemented.</bpmn:documentation>
+      <bpmn:incoming>fluxbank-transfer-recovery-detail_Flow23</bpmn:incoming>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="fluxbank-transfer-recovery-detail_serviceTask22" name="DLT publication failed&#10;Source offset does not advance&#10;Seek / redelivery; retry recovery">
+      <bpmn:documentation>Synchronous/asynchronous DLT failure or ACK timeout propagates. Original offset retained. Recovery failure does not reset the business retry budget.</bpmn:documentation>
+      <bpmn:incoming>fluxbank-transfer-recovery-detail_Flow24</bpmn:incoming>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="fluxbank-transfer-recovery-detail_Flow23" sourceRef="fluxbank-transfer-recovery-detail_exclusiveGateway19" targetRef="fluxbank-transfer-recovery-detail_serviceTask21" name="Yes" />
+    <bpmn:sequenceFlow id="fluxbank-transfer-recovery-detail_Flow24" sourceRef="fluxbank-transfer-recovery-detail_exclusiveGateway19" targetRef="fluxbank-transfer-recovery-detail_serviceTask22" name="No / timeout" />
+  </bpmn:process>
+  <bpmn:collaboration id="Collaboration_fluxbank-transfer-recovery-detail">
+    <bpmn:documentation>07 | Failure recovery, retry and DLT
+Source: current working tree, 2026-11-08. Documentation only; isExecutable=false. Solid arrows = local execution order. Dashed arrows = HTTP/Kafka messages across pools. Green expanded subprocess = Spring database transaction, not BPMN compensation semantics. Red = failure; amber = retry/recovery. DB visibility is by commit and SELECT, not an in-memory message. Open README.md for the source index and linked pages.</bpmn:documentation>
+    <bpmn:participant id="fluxbank-transfer-recovery-detail_outbox_pool" name="FluxBank | Outbox retry / stale recovery" processRef="fluxbank-transfer-recovery-detail_outbox" />
+    <bpmn:participant id="fluxbank-transfer-recovery-detail_consumer_pool" name="FluxBank | Consumer retry and DLT" processRef="fluxbank-transfer-recovery-detail_consumer" />
+  </bpmn:collaboration>
+  <bpmndi:BPMNDiagram id="Diagram_fluxbank-transfer-recovery-detail" name="07 | Failure recovery, retry and DLT">
+    <bpmndi:BPMNPlane id="Plane_fluxbank-transfer-recovery-detail" bpmnElement="Collaboration_fluxbank-transfer-recovery-detail">
+      <bpmndi:BPMNShape id="fluxbank-transfer-recovery-detail_outbox_pool_di" bpmnElement="fluxbank-transfer-recovery-detail_outbox_pool" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="20" y="20" width="1120" height="915" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-transfer-recovery-detail_outbox_detect_di" bpmnElement="fluxbank-transfer-recovery-detail_outbox_detect" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="50" y="20" width="1090" height="250" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-transfer-recovery-detail_outbox_record_di" bpmnElement="fluxbank-transfer-recovery-detail_outbox_record" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="50" y="270" width="1090" height="665" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-transfer-recovery-detail_serviceTask1_di" bpmnElement="fluxbank-transfer-recovery-detail_serviceTask1" bioc:fill="#fffbeb" bioc:stroke="#a16207">
+        <dc:Bounds x="110" y="80" width="340" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-transfer-recovery-detail_serviceTask2_di" bpmnElement="fluxbank-transfer-recovery-detail_serviceTask2" bioc:fill="#fff1f2" bioc:stroke="#be123c">
+        <dc:Bounds x="670" y="80" width="340" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-transfer-recovery-detail_serviceTask3_di" bpmnElement="fluxbank-transfer-recovery-detail_serviceTask3" bioc:fill="#fffbeb" bioc:stroke="#a16207">
+        <dc:Bounds x="430" y="330" width="300" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-transfer-recovery-detail_Flow4_di" bpmnElement="fluxbank-transfer-recovery-detail_Flow4">
+        <di:waypoint x="280.0" y="176" />
+        <di:waypoint x="280.0" y="253.0" />
+        <di:waypoint x="580.0" y="253.0" />
+        <di:waypoint x="580.0" y="330" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-transfer-recovery-detail_Flow5_di" bpmnElement="fluxbank-transfer-recovery-detail_Flow5">
+        <di:waypoint x="840.0" y="176" />
+        <di:waypoint x="840.0" y="253.0" />
+        <di:waypoint x="580.0" y="253.0" />
+        <di:waypoint x="580.0" y="330" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-transfer-recovery-detail_exclusiveGateway6_di" bpmnElement="fluxbank-transfer-recovery-detail_exclusiveGateway6" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="555" y="520" width="46" height="46" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="609" y="573" width="150" height="40" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-transfer-recovery-detail_Flow7_di" bpmnElement="fluxbank-transfer-recovery-detail_Flow7">
+        <di:waypoint x="580.0" y="426" />
+        <di:waypoint x="580.0" y="473.0" />
+        <di:waypoint x="578.0" y="473.0" />
+        <di:waypoint x="578.0" y="520" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-transfer-recovery-detail_serviceTask8_di" bpmnElement="fluxbank-transfer-recovery-detail_serviceTask8" bioc:fill="#fffbeb" bioc:stroke="#a16207">
+        <dc:Bounds x="110" y="705" width="340" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-transfer-recovery-detail_serviceTask9_di" bpmnElement="fluxbank-transfer-recovery-detail_serviceTask9" bioc:fill="#fff1f2" bioc:stroke="#be123c">
+        <dc:Bounds x="670" y="705" width="340" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-transfer-recovery-detail_Flow10_di" bpmnElement="fluxbank-transfer-recovery-detail_Flow10" bioc:stroke="#a16207">
+        <di:waypoint x="555" y="543" />
+        <di:waypoint x="280" y="543" />
+        <di:waypoint x="280" y="705" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="290" y="640" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-transfer-recovery-detail_Flow11_di" bpmnElement="fluxbank-transfer-recovery-detail_Flow11" bioc:stroke="#be123c">
+        <di:waypoint x="601" y="543" />
+        <di:waypoint x="840" y="543" />
+        <di:waypoint x="840" y="705" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="780" y="640" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-transfer-recovery-detail_consumer_pool_di" bpmnElement="fluxbank-transfer-recovery-detail_consumer_pool" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="20" y="975" width="1120" height="1035" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-transfer-recovery-detail_consumer_classify_di" bpmnElement="fluxbank-transfer-recovery-detail_consumer_classify" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="50" y="975" width="1090" height="250" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-transfer-recovery-detail_consumer_retry_di" bpmnElement="fluxbank-transfer-recovery-detail_consumer_retry" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="50" y="1225" width="1090" height="785" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-transfer-recovery-detail_serviceTask12_di" bpmnElement="fluxbank-transfer-recovery-detail_serviceTask12" bioc:fill="#fff1f2" bioc:stroke="#be123c">
+        <dc:Bounds x="110" y="1030" width="340" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-transfer-recovery-detail_exclusiveGateway13_di" bpmnElement="fluxbank-transfer-recovery-detail_exclusiveGateway13" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="680" y="1055" width="46" height="46" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="734" y="1108" width="150" height="40" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-transfer-recovery-detail_Flow14_di" bpmnElement="fluxbank-transfer-recovery-detail_Flow14">
+        <di:waypoint x="450" y="1078.0" />
+        <di:waypoint x="680" y="1078.0" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-transfer-recovery-detail_serviceTask15_di" bpmnElement="fluxbank-transfer-recovery-detail_serviceTask15" bioc:fill="#fffbeb" bioc:stroke="#a16207">
+        <dc:Bounds x="110" y="1290" width="340" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-transfer-recovery-detail_serviceTask16_di" bpmnElement="fluxbank-transfer-recovery-detail_serviceTask16" bioc:fill="#eff6ff" bioc:stroke="#1d4ed8">
+        <dc:Bounds x="670" y="1290" width="340" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-transfer-recovery-detail_Flow17_di" bpmnElement="fluxbank-transfer-recovery-detail_Flow17" bioc:stroke="#a16207">
+        <di:waypoint x="703" y="1101" />
+        <di:waypoint x="703" y="1190" />
+        <di:waypoint x="280" y="1190" />
+        <di:waypoint x="280" y="1290" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="285" y="1205" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-transfer-recovery-detail_Flow18_di" bpmnElement="fluxbank-transfer-recovery-detail_Flow18" bioc:stroke="#be123c">
+        <di:waypoint x="726" y="1078" />
+        <di:waypoint x="840" y="1078" />
+        <di:waypoint x="840" y="1290" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="845" y="1205" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-transfer-recovery-detail_exclusiveGateway19_di" bpmnElement="fluxbank-transfer-recovery-detail_exclusiveGateway19" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="815" y="1500" width="46" height="46" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="869" y="1553" width="150" height="40" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-transfer-recovery-detail_Flow20_di" bpmnElement="fluxbank-transfer-recovery-detail_Flow20">
+        <di:waypoint x="840.0" y="1386" />
+        <di:waypoint x="840.0" y="1443.0" />
+        <di:waypoint x="838.0" y="1443.0" />
+        <di:waypoint x="838.0" y="1500" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-transfer-recovery-detail_serviceTask21_di" bpmnElement="fluxbank-transfer-recovery-detail_serviceTask21" bioc:fill="#eff6ff" bioc:stroke="#1d4ed8">
+        <dc:Bounds x="110" y="1710" width="340" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-transfer-recovery-detail_serviceTask22_di" bpmnElement="fluxbank-transfer-recovery-detail_serviceTask22" bioc:fill="#fff1f2" bioc:stroke="#be123c">
+        <dc:Bounds x="670" y="1710" width="340" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-transfer-recovery-detail_Flow23_di" bpmnElement="fluxbank-transfer-recovery-detail_Flow23" bioc:stroke="#1d4ed8">
+        <di:waypoint x="815" y="1523" />
+        <di:waypoint x="280" y="1523" />
+        <di:waypoint x="280" y="1710" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="290" y="1620" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-transfer-recovery-detail_Flow24_di" bpmnElement="fluxbank-transfer-recovery-detail_Flow24" bioc:stroke="#be123c">
+        <di:waypoint x="861" y="1523" />
+        <di:waypoint x="1080" y="1523" />
+        <di:waypoint x="1080" y="1758" />
+        <di:waypoint x="1010" y="1758" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="920" y="1630" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

@@ -4,6 +4,7 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.autoconfigure.jackson.JacksonAutoConfiguration;
 import org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration;
 import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -19,7 +20,7 @@ class KafkaProducerConfigurationTest {
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
             .withInitializer(new ConfigDataApplicationContextInitializer())
             .withUserConfiguration(TransferCompletedKafkaPublisher.class)
-            .withConfiguration(AutoConfigurations.of(KafkaAutoConfiguration.class));
+            .withConfiguration(AutoConfigurations.of(KafkaAutoConfiguration.class, JacksonAutoConfiguration.class));
 
     @Test
     void bootCreatesJsonProducerInfrastructureWithApplicationDefaultsWithoutConnectingToKafka() {

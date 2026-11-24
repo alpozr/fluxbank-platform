@@ -24,7 +24,8 @@ class TransactionHistoryServiceTest {
     private final TransferRepository transfers = mock(TransferRepository.class);
     private final TransactionRepository transactions = mock(TransactionRepository.class);
     private final TransactionReferenceGenerator references = mock(TransactionReferenceGenerator.class);
-    private final TransactionHistoryService service = new TransactionHistoryService(transfers, transactions, references);
+    private final TransactionHistoryService service = new TransactionHistoryService(transfers, transactions, references,
+            mock(com.fluxbank.account.repository.AccountRepository.class));
     private final Account source = Account.create(null, "source", "source-iban", 1L, 1, CurrencyCode.BGN);
     private final Account destination = Account.create(null, "destination", "destination-iban", 2L, 2, CurrencyCode.BGN);
 

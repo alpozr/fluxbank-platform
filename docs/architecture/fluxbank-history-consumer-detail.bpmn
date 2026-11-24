@@ -1,0 +1,235 @@
+<?xml version='1.0' encoding='utf-8'?>
+<bpmn:definitions xmlns:bioc="http://bpmn.io/schema/bpmn/biocolor/1.0" xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" id="Definitions_fluxbank-history-consumer-detail" targetNamespace="https://fluxbank.local/architecture" exporter="FluxBank architecture documentation" exporterVersion="2">
+  <bpmn:process id="fluxbank-history-consumer-detail_broker" name="Kafka | transfer-events.v1" isExecutable="false">
+    <bpmn:sendTask id="fluxbank-history-consumer-detail_sendTask1" name="Deliver TRANSFER_COMPLETED&#10;Group: fluxbank.transaction-history.v1" />
+  </bpmn:process>
+  <bpmn:process id="fluxbank-history-consumer-detail_consumer" name="FluxBank | Transaction History consumer" isExecutable="false">
+    <bpmn:laneSet id="fluxbank-history-consumer-detail_consumer_lanes">
+      <bpmn:lane id="fluxbank-history-consumer-detail_consumer_entry" name="Listener">
+        <bpmn:flowNodeRef>fluxbank-history-consumer-detail_serviceTask2</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="fluxbank-history-consumer-detail_consumer_hist" name="History">
+        <bpmn:flowNodeRef>fluxbank-history-consumer-detail_subProcess4</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="fluxbank-history-consumer-detail_consumer_offset" name="Offset / failure">
+        <bpmn:flowNodeRef>fluxbank-history-consumer-detail_serviceTask18</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-history-consumer-detail_serviceTask21</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>fluxbank-history-consumer-detail_serviceTask23</bpmn:flowNodeRef>
+      </bpmn:lane>
+    </bpmn:laneSet>
+    <bpmn:serviceTask id="fluxbank-history-consumer-detail_serviceTask2" name="01 | Deserialize and invoke listener&#10;TransferEventsKafkaListener.handle()&#10;→ processor.process(event)">
+      <bpmn:documentation>ErrorHandlingDeserializer → JsonDeserializer. Malformed JSON bypasses business listener and goes to recovery/DLT page. Legacy snapshot is rejected by processor before marker INSERT.
+Sources: TransferEventsKafkaListener.handle() — src/main/java/com/fluxbank/transaction/infrastructure/kafka/TransferEventsKafkaListener.java:20</bpmn:documentation>
+      <bpmn:outgoing>fluxbank-history-consumer-detail_Flow5</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:subProcess id="fluxbank-history-consumer-detail_subProcess4" name="TX-HISTORY | TransactionHistoryEventProcessor.process() [REQUIRED]">
+      <bpmn:documentation>Spring proxy starts this database transaction on entry. Successful return/flush commits all enclosed writes. RuntimeException or commit failure rolls back the enclosed writes. JPA SQL may be issued at flush; the diagram shows Java execution order. REQUIRED joins a caller transaction; the normal HTTP orchestration has no outer transaction.
+Sources: TransactionHistoryEventProcessor.process() — src/main/java/com/fluxbank/transaction/application/TransactionHistoryEventProcessor.java:20</bpmn:documentation>
+      <bpmn:incoming>fluxbank-history-consumer-detail_Flow5</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-history-consumer-detail_Flow19</bpmn:outgoing>
+      <bpmn:serviceTask id="fluxbank-history-consumer-detail_serviceTask6" name="02 | Validate + INSERT marker&#10;ProcessedEventRepository&#10;.insertIfAbsent()">
+        <bpmn:documentation>Validate complete TransferCompletedEvent snapshot. INSERT INTO fluxbank.processed_event(event_id,event_type) VALUES(...) ON CONFLICT(event_id) DO NOTHING. processed_at default CURRENT_TIMESTAMP.
+Sources: TransactionHistoryEventProcessor.process() — src/main/java/com/fluxbank/transaction/application/TransactionHistoryEventProcessor.java:20; ProcessedEventRepository.insertIfAbsent() — src/main/java/com/fluxbank/processed/repository/ProcessedEventRepository.java:18</bpmn:documentation>
+        <bpmn:outgoing>fluxbank-history-consumer-detail_Flow8</bpmn:outgoing>
+      </bpmn:serviceTask>
+      <bpmn:exclusiveGateway id="fluxbank-history-consumer-detail_exclusiveGateway7" name="Inserted marker?">
+        <bpmn:incoming>fluxbank-history-consumer-detail_Flow8</bpmn:incoming>
+        <bpmn:outgoing>fluxbank-history-consumer-detail_Flow10</bpmn:outgoing>
+        <bpmn:outgoing>fluxbank-history-consumer-detail_Flow17</bpmn:outgoing>
+      </bpmn:exclusiveGateway>
+      <bpmn:sequenceFlow id="fluxbank-history-consumer-detail_Flow8" sourceRef="fluxbank-history-consumer-detail_serviceTask6" targetRef="fluxbank-history-consumer-detail_exclusiveGateway7" />
+      <bpmn:serviceTask id="fluxbank-history-consumer-detail_serviceTask9" name="03 | Load completed Transfer / accounts&#10;TransactionHistoryService&#10;.createForSnapshot()">
+        <bpmn:documentation>REQUIRED joins TX-HISTORY. TransferRepository.findByPublicId() must find COMPLETED. Accounts loaded by snapshot UUID. Amount/currency/type come from snapshot, not mutable Transfer metadata.
+Sources: TransactionHistoryService.createForSnapshot() — src/main/java/com/fluxbank/transaction/application/TransactionHistoryService.java:55; TransactionHistoryService.completedTransfer() — src/main/java/com/fluxbank/transaction/application/TransactionHistoryService.java:68; AccountRepository.findByPublicId() — src/main/java/com/fluxbank/account/repository/AccountRepository.java:32</bpmn:documentation>
+        <bpmn:incoming>fluxbank-history-consumer-detail_Flow10</bpmn:incoming>
+        <bpmn:outgoing>fluxbank-history-consumer-detail_Flow12</bpmn:outgoing>
+      </bpmn:serviceTask>
+      <bpmn:sequenceFlow id="fluxbank-history-consumer-detail_Flow10" sourceRef="fluxbank-history-consumer-detail_exclusiveGateway7" targetRef="fluxbank-history-consumer-detail_serviceTask9" name="1: new event" />
+      <bpmn:serviceTask id="fluxbank-history-consumer-detail_serviceTask11" name="04 | Check expected movements&#10;TransactionHistoryService&#10;.createMovements()">
+        <bpmn:documentation>INTERNAL 0/0→insert pair, 1/1→no-op, partial 1/0 or 0/1→TransactionHistoryInconsistentException/rollback. EXTERNAL existing debit→no-op.
+Sources: TransactionHistoryService.createMovements() — src/main/java/com/fluxbank/transaction/application/TransactionHistoryService.java:78; TransactionRepository.existsByTransferAndAccountAndTypeAndDirection() — src/main/java/com/fluxbank/transaction/repository/TransactionRepository.java:12</bpmn:documentation>
+        <bpmn:incoming>fluxbank-history-consumer-detail_Flow12</bpmn:incoming>
+        <bpmn:outgoing>fluxbank-history-consumer-detail_Flow14</bpmn:outgoing>
+      </bpmn:serviceTask>
+      <bpmn:sequenceFlow id="fluxbank-history-consumer-detail_Flow12" sourceRef="fluxbank-history-consumer-detail_serviceTask9" targetRef="fluxbank-history-consumer-detail_serviceTask11" />
+      <bpmn:serviceTask id="fluxbank-history-consumer-detail_serviceTask13" name="05 | INSERT missing History only&#10;TransactionRepository.saveAll() / save()&#10;INTERNAL: A DEBIT + B CREDIT&#10;EXTERNAL: A DEBIT">
+        <bpmn:documentation>Each row has a UUID + unique TXN-yyyyMMdd-sequence reference. amount=+100 EUR; direction carries debit/credit meaning. Unique(transfer_id,account_id,type,direction). No balance UPDATE.
+Sources: TransactionHistoryService.createMovement() — src/main/java/com/fluxbank/transaction/application/TransactionHistoryService.java:112; TransactionReferenceGenerator.nextReference() — src/main/java/com/fluxbank/transaction/application/TransactionReferenceGenerator.java:18; Transaction.createTransferMovement() — src/main/java/com/fluxbank/transaction/domain/Transaction.java:59</bpmn:documentation>
+        <bpmn:incoming>fluxbank-history-consumer-detail_Flow14</bpmn:incoming>
+        <bpmn:outgoing>fluxbank-history-consumer-detail_Flow16</bpmn:outgoing>
+      </bpmn:serviceTask>
+      <bpmn:sequenceFlow id="fluxbank-history-consumer-detail_Flow14" sourceRef="fluxbank-history-consumer-detail_serviceTask11" targetRef="fluxbank-history-consumer-detail_serviceTask13" />
+      <bpmn:endEvent id="fluxbank-history-consumer-detail_endEvent15" name="COMMIT marker + required History">
+        <bpmn:incoming>fluxbank-history-consumer-detail_Flow16</bpmn:incoming>
+        <bpmn:incoming>fluxbank-history-consumer-detail_Flow17</bpmn:incoming>
+      </bpmn:endEvent>
+      <bpmn:sequenceFlow id="fluxbank-history-consumer-detail_Flow16" sourceRef="fluxbank-history-consumer-detail_serviceTask13" targetRef="fluxbank-history-consumer-detail_endEvent15" />
+      <bpmn:sequenceFlow id="fluxbank-history-consumer-detail_Flow17" sourceRef="fluxbank-history-consumer-detail_exclusiveGateway7" targetRef="fluxbank-history-consumer-detail_endEvent15" name="0: duplicate → no-op" />
+    </bpmn:subProcess>
+    <bpmn:sequenceFlow id="fluxbank-history-consumer-detail_Flow5" sourceRef="fluxbank-history-consumer-detail_serviceTask2" targetRef="fluxbank-history-consumer-detail_subProcess4" />
+    <bpmn:serviceTask id="fluxbank-history-consumer-detail_serviceTask18" name="06 | Return; commit Kafka offset&#10;Spring Kafka container&#10;RECORD; auto-commit=false">
+      <bpmn:documentation>PostgreSQL COMMIT precedes listener return; Kafka offset commit is a separate operation. Duplicate no-op is also a successful delivery.</bpmn:documentation>
+      <bpmn:incoming>fluxbank-history-consumer-detail_Flow19</bpmn:incoming>
+      <bpmn:outgoing>fluxbank-history-consumer-detail_Flow24</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="fluxbank-history-consumer-detail_Flow19" sourceRef="fluxbank-history-consumer-detail_subProcess4" targetRef="fluxbank-history-consumer-detail_serviceTask18" />
+    <bpmn:boundaryEvent id="fluxbank-history-consumer-detail_boundaryEvent20" name="Rollback" attachedToRef="fluxbank-history-consumer-detail_subProcess4" cancelActivity="true">
+      <bpmn:outgoing>fluxbank-history-consumer-detail_Flow22</bpmn:outgoing>
+      <bpmn:errorEventDefinition id="fluxbank-history-consumer-detail_boundaryEvent20_error" />
+    </bpmn:boundaryEvent>
+    <bpmn:serviceTask id="fluxbank-history-consumer-detail_serviceTask21" name="ROLLBACK marker + all History&#10;No financial balance rollback&#10;Retry classification / DLT: page 07">
+      <bpmn:documentation>Finance already committed. Failed credit insert or missing/partial state rolls back marker as well. Source Kafka offset not advanced for unresolved failure.
+Sources: TransferEventsConsumerConfiguration.transferEventsErrorHandler() — src/main/java/com/fluxbank/transaction/infrastructure/kafka/TransferEventsConsumerConfiguration.java:43</bpmn:documentation>
+      <bpmn:incoming>fluxbank-history-consumer-detail_Flow22</bpmn:incoming>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="fluxbank-history-consumer-detail_Flow22" sourceRef="fluxbank-history-consumer-detail_boundaryEvent20" targetRef="fluxbank-history-consumer-detail_serviceTask21" />
+    <bpmn:serviceTask id="fluxbank-history-consumer-detail_serviceTask23" name="DB committed but offset failed?&#10;Same event can be delivered again&#10;Marker conflict → no-op">
+      <bpmn:documentation>Concurrent same eventId waits on PostgreSQL PK conflict: first commit→0/no-op; first rollback→waiter can insert and process. No exactly-once Kafka claim.
+Sources: ProcessedEventRepository.insertIfAbsent() — src/main/java/com/fluxbank/processed/repository/ProcessedEventRepository.java:18</bpmn:documentation>
+      <bpmn:incoming>fluxbank-history-consumer-detail_Flow24</bpmn:incoming>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="fluxbank-history-consumer-detail_Flow24" sourceRef="fluxbank-history-consumer-detail_serviceTask18" targetRef="fluxbank-history-consumer-detail_serviceTask23" name="Crash / commit failure" />
+  </bpmn:process>
+  <bpmn:collaboration id="Collaboration_fluxbank-history-consumer-detail">
+    <bpmn:documentation>06 | Kafka → atomic History → offset
+Source: current working tree, 2026-11-08. Documentation only; isExecutable=false. Solid arrows = local execution order. Dashed arrows = HTTP/Kafka messages across pools. Green expanded subprocess = Spring database transaction, not BPMN compensation semantics. Red = failure; amber = retry/recovery. DB visibility is by commit and SELECT, not an in-memory message. Open README.md for the source index and linked pages.</bpmn:documentation>
+    <bpmn:participant id="fluxbank-history-consumer-detail_broker_pool" name="Kafka | transfer-events.v1" processRef="fluxbank-history-consumer-detail_broker" />
+    <bpmn:participant id="fluxbank-history-consumer-detail_consumer_pool" name="FluxBank | Transaction History consumer" processRef="fluxbank-history-consumer-detail_consumer" />
+    <bpmn:messageFlow id="fluxbank-history-consumer-detail_Message3" sourceRef="fluxbank-history-consumer-detail_sendTask1" targetRef="fluxbank-history-consumer-detail_serviceTask2" name="Kafka delivery" />
+  </bpmn:collaboration>
+  <bpmndi:BPMNDiagram id="Diagram_fluxbank-history-consumer-detail" name="06 | Kafka → atomic History → offset">
+    <bpmndi:BPMNPlane id="Plane_fluxbank-history-consumer-detail" bpmnElement="Collaboration_fluxbank-history-consumer-detail">
+      <bpmndi:BPMNShape id="fluxbank-history-consumer-detail_broker_pool_di" bpmnElement="fluxbank-history-consumer-detail_broker_pool" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="20" y="20" width="1120" height="155" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-history-consumer-detail_sendTask1_di" bpmnElement="fluxbank-history-consumer-detail_sendTask1" bioc:fill="#eff6ff" bioc:stroke="#1d4ed8">
+        <dc:Bounds x="110" y="50" width="340" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-history-consumer-detail_consumer_pool_di" bpmnElement="fluxbank-history-consumer-detail_consumer_pool" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="20" y="215" width="1120" height="1590" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-history-consumer-detail_consumer_entry_di" bpmnElement="fluxbank-history-consumer-detail_consumer_entry" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="50" y="215" width="1090" height="220" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-history-consumer-detail_consumer_hist_di" bpmnElement="fluxbank-history-consumer-detail_consumer_hist" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="50" y="435" width="1090" height="940" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-history-consumer-detail_consumer_offset_di" bpmnElement="fluxbank-history-consumer-detail_consumer_offset" bioc:fill="#f8fafc" bioc:stroke="#64748b" isHorizontal="true">
+        <dc:Bounds x="50" y="1375" width="1090" height="430" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-history-consumer-detail_serviceTask2_di" bpmnElement="fluxbank-history-consumer-detail_serviceTask2" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="110" y="265" width="340" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-history-consumer-detail_Message3_di" bpmnElement="fluxbank-history-consumer-detail_Message3">
+        <di:waypoint x="280.0" y="146" />
+        <di:waypoint x="280.0" y="265" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="140" y="180" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-history-consumer-detail_subProcess4_di" bpmnElement="fluxbank-history-consumer-detail_subProcess4" bioc:fill="#f0fdf4" bioc:stroke="#15803d" isExpanded="true">
+        <dc:Bounds x="120" y="485" width="920" height="820" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-history-consumer-detail_Flow5_di" bpmnElement="fluxbank-history-consumer-detail_Flow5">
+        <di:waypoint x="280" y="361" />
+        <di:waypoint x="280" y="465" />
+        <di:waypoint x="580" y="465" />
+        <di:waypoint x="580" y="485" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-history-consumer-detail_serviceTask6_di" bpmnElement="fluxbank-history-consumer-detail_serviceTask6" bioc:fill="#f0fdf4" bioc:stroke="#15803d">
+        <dc:Bounds x="150" y="560" width="300" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-history-consumer-detail_exclusiveGateway7_di" bpmnElement="fluxbank-history-consumer-detail_exclusiveGateway7" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="680" y="585" width="46" height="46" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="734" y="638" width="150" height="40" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-history-consumer-detail_Flow8_di" bpmnElement="fluxbank-history-consumer-detail_Flow8">
+        <di:waypoint x="450" y="608.0" />
+        <di:waypoint x="680" y="608.0" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-history-consumer-detail_serviceTask9_di" bpmnElement="fluxbank-history-consumer-detail_serviceTask9" bioc:fill="#f0fdf4" bioc:stroke="#15803d">
+        <dc:Bounds x="150" y="780" width="340" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-history-consumer-detail_Flow10_di" bpmnElement="fluxbank-history-consumer-detail_Flow10">
+        <di:waypoint x="703" y="631" />
+        <di:waypoint x="703" y="725" />
+        <di:waypoint x="320" y="725" />
+        <di:waypoint x="320" y="780" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="500" y="675" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-history-consumer-detail_serviceTask11_di" bpmnElement="fluxbank-history-consumer-detail_serviceTask11" bioc:fill="#f0fdf4" bioc:stroke="#15803d">
+        <dc:Bounds x="630" y="780" width="380" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-history-consumer-detail_Flow12_di" bpmnElement="fluxbank-history-consumer-detail_Flow12">
+        <di:waypoint x="490" y="828.0" />
+        <di:waypoint x="630" y="828.0" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-history-consumer-detail_serviceTask13_di" bpmnElement="fluxbank-history-consumer-detail_serviceTask13" bioc:fill="#f0fdf4" bioc:stroke="#15803d">
+        <dc:Bounds x="630" y="990" width="380" height="110" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-history-consumer-detail_Flow14_di" bpmnElement="fluxbank-history-consumer-detail_Flow14">
+        <di:waypoint x="820.0" y="876" />
+        <di:waypoint x="820.0" y="990" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-history-consumer-detail_endEvent15_di" bpmnElement="fluxbank-history-consumer-detail_endEvent15" bioc:fill="#ffffff" bioc:stroke="#334155">
+        <dc:Bounds x="790" y="1200" width="32" height="32" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="720" y="1239" width="172" height="40" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-history-consumer-detail_Flow16_di" bpmnElement="fluxbank-history-consumer-detail_Flow16">
+        <di:waypoint x="820.0" y="1100" />
+        <di:waypoint x="820.0" y="1150.0" />
+        <di:waypoint x="806.0" y="1150.0" />
+        <di:waypoint x="806.0" y="1200" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fluxbank-history-consumer-detail_Flow17_di" bpmnElement="fluxbank-history-consumer-detail_Flow17" bioc:stroke="#15803d">
+        <di:waypoint x="726" y="608" />
+        <di:waypoint x="1025" y="608" />
+        <di:waypoint x="1025" y="1216" />
+        <di:waypoint x="822" y="1216" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="825" y="1150" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-history-consumer-detail_serviceTask18_di" bpmnElement="fluxbank-history-consumer-detail_serviceTask18" bioc:fill="#eff6ff" bioc:stroke="#1d4ed8">
+        <dc:Bounds x="150" y="1450" width="340" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-history-consumer-detail_Flow19_di" bpmnElement="fluxbank-history-consumer-detail_Flow19">
+        <di:waypoint x="580" y="1305" />
+        <di:waypoint x="580" y="1410" />
+        <di:waypoint x="320" y="1410" />
+        <di:waypoint x="320" y="1450" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-history-consumer-detail_boundaryEvent20_di" bpmnElement="fluxbank-history-consumer-detail_boundaryEvent20" bioc:fill="#fff1f2" bioc:stroke="#be123c">
+        <dc:Bounds x="995" y="1290" width="30" height="30" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="925" y="1327" width="170" height="40" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="fluxbank-history-consumer-detail_serviceTask21_di" bpmnElement="fluxbank-history-consumer-detail_serviceTask21" bioc:fill="#fff1f2" bioc:stroke="#be123c">
+        <dc:Bounds x="630" y="1450" width="380" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-history-consumer-detail_Flow22_di" bpmnElement="fluxbank-history-consumer-detail_Flow22" bioc:stroke="#be123c">
+        <di:waypoint x="1010" y="1320" />
+        <di:waypoint x="1080" y="1320" />
+        <di:waypoint x="1080" y="1498" />
+        <di:waypoint x="1010" y="1498" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNShape id="fluxbank-history-consumer-detail_serviceTask23_di" bpmnElement="fluxbank-history-consumer-detail_serviceTask23" bioc:fill="#fffbeb" bioc:stroke="#a16207">
+        <dc:Bounds x="150" y="1655" width="340" height="96" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="fluxbank-history-consumer-detail_Flow24_di" bpmnElement="fluxbank-history-consumer-detail_Flow24" bioc:stroke="#a16207">
+        <di:waypoint x="320.0" y="1546" />
+        <di:waypoint x="320.0" y="1655" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="335" y="1595" width="150" height="30" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>
