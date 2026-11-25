@@ -65,8 +65,8 @@ Jira snapshot verified **8 November 2026**. “Completed” maps to **Done**; �
 |---|---|---|
 | [FLUX-18](https://fluxbank.atlassian.net/browse/FLUX-18) | Transactional Outbox | 🟢 Completed |
 | [FLUX-19](https://fluxbank.atlassian.net/browse/FLUX-19) | Apache Kafka integration | 🟢 Completed |
-| [FLUX-20](https://fluxbank.atlassian.net/browse/FLUX-20) | Event-driven Transaction History | 🟡 In Progress |
-| [FLUX-21](https://fluxbank.atlassian.net/browse/FLUX-21) | Observability & correlation logging | ⚪ Planned |
+| [FLUX-20](https://fluxbank.atlassian.net/browse/FLUX-20) | Event-driven Transaction History | 🟢 Completed |
+| [FLUX-21](https://fluxbank.atlassian.net/browse/FLUX-21) | Observability & correlation logging | 🟡 In Progress|
 | [FLUX-22](https://fluxbank.atlassian.net/browse/FLUX-22) | OpenAPI & Swagger documentation | ⚪ Planned |
 | [FLUX-23](https://fluxbank.atlassian.net/browse/FLUX-23) | Jenkins CI pipeline | ⚪ Planned |
 | [FLUX-24](https://fluxbank.atlassian.net/browse/FLUX-24) | OpenShift deployment | ⚪ Planned |
